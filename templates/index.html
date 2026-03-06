@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>METAR Data Processing & Visualization Platform</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+
+<audio id="lowVisSound" src="{{ url_for('static', filename='alarm.mp3') }}" preload="auto"></audio>
+<audio id="newDataSound" src="{{ url_for('static', filename='notify.mp3') }}" preload="auto"></audio>
+
+<div class="dashboard-container">
+
+    <!-- ALERT BOX -->
+    <div id="alert-box" class="alert-box" style="display: none;"></div>
+
+    <!-- Sound Enable Button -->
+    <button onclick="enableSound()" class="btn btn-warning sound-btn">🔊 Enable Alarm Sound</button>
+
+    <!-- HEADER -->
+    <div class="dashboard-header">
+        <div class="d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center">
+                <img src="https://yt3.googleusercontent.com/irzhWXcNV6M94Ow6P2ytjC2HFi7gVbLbkq2wcgwOyie63VkKHBiWUw1XJjc1NJUeWwgFwsWjYw=s900-c-k-c0x00ffffff-no-rj" 
+                     alt="BMKG Juanda Logo" 
+                     class="bmkg-logo me-3"
+                     style="height: 80px; object-fit: contain;">
+                <div>
+                    <h2>METAR Data Processing & Visualization Platform</h2>
+                    <h3>Weather: <span id="weather-icon" class="weather-icon">☀️</span></h3>
+                    <small id="lastUpdate" class="last-update">Last Update: {{ last_saved }}</small>
+                </div>
+            </div>
+            <div id="status-indicator" class="status-indicator">
+                <span class="offline-dot"></span> OFFLINE
+            </div>
+        </div>
+    </div>
+
+    <!-- NAVBAR -->
+    <div class="dashboard-navbar">
+        <div class="nav-left">
+            <span class="nav-icon">✈️</span> Aviation Weather Monitoring
+        </div>
+        <div class="nav-right">
+            <a href="/" class="nav-btn">📊 Monitoring</a>
+            <a href="/history_by_date" class="nav-btn">📅 History</a>
+            <a href="/manual_parser" class="nav-btn">🔧 Manual Parser</a>
+        </div>
+    </div>
+
+    <!-- INPUT FORM -->
+    <div class="card-custom form-card">
+        <form method="POST" class="row g-3 align-items-center">
+            <div class="col-md-4">
+                <div class="input-group">
+                    <span class="input-icon"></span>
+                    <input type="text" name="icao"
+                           value="{{ station }}"
+                           class="form-control"
+                           placeholder="Enter ICAO (WARR)">
+                </div>
+            </div>
+
+            <div class="col-md-2">
+                <button class="btn-primary-custom w-100">
+                    ⚡ Load METAR
+                </button>
+            </div>
+
+            <div class="col-md-2">
+                <a href="/download_csv" class="btn-secondary-custom w-100">
+                    📥 Download CSV
+                </a>
+            </div>
+        </form>
+    </div>
+
+    <!-- LATEST METAR DISPLAY WITH STATUS COLOR -->
+    {% if latest %}
+    {% set status_class = "" %}
+    {% if latest.status == "danger" %}
+    {% set status_class = "status-danger" %}
+    {% elif latest.status == "warning" %}
+    {% set status_class = "status-warning" %}
+    {% endif %}
+    <div class="card-custom">
+        <h5>📡 METAR Terbaru - {{ latest['station'] }}</h5>
+        <div class="metar-display {{ status_class }}">
+        {{ latest["metar"] }}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- QAM DISPLAY -->
+    {% if qam %}
+    <div class="card-custom">
+        <h5>QAM Report</h5>
+        <pre id="qamDisplay">{{ qam }}</pre>
+
+        <button onclick="copyQamToClipboard()" class="btn-outline-custom mt-2">
+            Copy Text QAM
+        </button>
+        <span id="copyFeedback" class="copy-feedback ms-2">Copied!</span>
+    </div>
+    {% endif %}
+
+    <!-- NARRATIVE DISPLAY -->
+    {% if narrative %}
+    <div class="card-custom mt-4">
+        <h5>📝 Narasi Cuaca</h5>
+        <div id="narrativeDisplay" class="narrative-display text-dark">
+    {{ narrative }}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- METAR DATA DISPLAY -->
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card-custom">
+                <h5>Current METAR Data</h5>
+                <div class="row">
+                    <div class="col-md-4">
+                        <p><strong>Wind:</strong> <span id="wind">--</span></p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>Visibility:</strong> <span id="visibility">--</span></p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>Weather:</strong> <span id="weather">--</span></p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>Cloud:</strong> <span id="cloud">--</span></p>
+                    </div>
+                    <div class="col-md-4">
+                        <p><strong>QNH:</strong> <span id="qnh">--</span> MB</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CHARTS -->
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card-custom">
+                <h5 class="chart-title">Temperature Trend</h5>
+                <div class="chart-container">
+                    <canvas id="tempChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card-custom">
+                <h5 class="chart-title">Pressure Trend</h5>
+                <div class="chart-container">
+                    <canvas id="pressureChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card-custom">
+                <h5>Wind Speed Trend</h5>
+                <div class="chart-container">
+                    <canvas id="windChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card-custom">
+                <h5>Wind Direction (Wind Rose)</h5>
+                <div class="chart-container" style="height: 300px;">
+                    <canvas id="windRose"></canvas>
+                </div>
+        </div>
+    </div>
+
+    <script>
+        const STATION = "{{ station }}";
+
+        function copyQamToClipboard() {
+            const qamElement = document.getElementById('qamDisplay');
+            const qamText = qamElement.innerText;
+            navigator.clipboard.writeText(qamText).then(function() {
+                const feedback = document.getElementById('copyFeedback');
+                feedback.style.display = 'inline';
+                setTimeout(function() {
+                    feedback.style.display = 'none';
+                }, 2000);
+            }).catch(function(err) {
+                console.error('Gagal menyalin teks: ', err);
+            });
+        }
+    </script>
+
+    <!-- HISTORY -->
+    <div class="card-custom mt-4">
+        <h5>Last 20 Records</h5>
+
+        <table class="table table-custom">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Station</th>
+                    <th>METAR</th>
+                </tr>
+            </thead>
+            <tbody id="historyTableBody">
+                {% if has_history %}
+                {% for index, row in history.iloc[::-1].iterrows() %}
+                <tr>
+                    <td>{{ row['time'] }}</td>
+                    <td>{{ row['station'] }}</td>
+                    <td>{{ row['metar'] }}</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="3" class="text-center">No data available</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+
+        <div class="last-save">
+            Waktu terakhir disimpan: <span id="lastSaved">{{ last_saved }}</span>
+        </div>
+    </div>
+
+</div>
+
+<!-- DATA PASSING TO JS -->
+<script>
+    const chartLabels = {{ (history['time'].tolist() | tojson) if has_history else [] }};
+    const tempData = {{ temps | tojson }};
+    const pressureData = {{ pressures | tojson }};
+</script>
+
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+
+</body>
+</html>
