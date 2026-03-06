@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
 
@@ -179,10 +180,26 @@
 
         <div class="col-md-6">
             <div class="card-custom">
-                <h5>Wind Direction (Wind Rose)</h5>
-                <div class="chart-container" style="height: 300px;">
-                    <canvas id="windRose"></canvas>
-                </div>
+                <h5>Wind Rose (24h Historical)</h5>
+                <div id="windRoseChart" style="height: 350px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- WIND COMPASS + WIND ROSE SEPARATED -->
+    <div class="row mt-4">
+        <div class="col-md-6">
+            <div class="card-custom text-center">
+                <h5>Wind Compass (Real-Time)</h5>
+                <div id="windCompassChart" style="height: 350px;"></div>
+            </div>
+        </div>
+
+        <div class="col-md-6">
+            <div class="card-custom text-center">
+                <h5>Wind Rose (Historical)</h5>
+                <div id="windRoseChartNew" style="height: 350px;"></div>
+            </div>
         </div>
     </div>
 

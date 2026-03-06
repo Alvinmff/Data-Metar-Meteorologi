@@ -11,12 +11,26 @@ from io import BytesIO
 from flask_socketio import SocketIO
 import time
 import threading
+from collections import deque
 
 
 app = Flask(__name__)
 socketio = SocketIO(app, async_mode="threading")
 
 CSV_FILE = "metar_history.csv"
+
+# Wind history storage for Wind Rose
+wind_history = deque(maxlen=500)
+
+# Store wind data for Wind Rose
+def store_wind(parsed):
+    if parsed["wind_dir"] and parsed["wind_speed_kt"]:
+        wind_history.append({
+            "time": datetime.utcnow(),
+            "dir": int(parsed["wind_dir"]),
+            "speed": float(parsed["wind_speed_kt"])
+        })
+        print(f"[WIND] Stored: dir={parsed['wind_dir']}, speed={parsed['wind_speed_kt']} kt")
 
 
 FONNTE_TOKEN = "iNQh3nXPgRFpShmXvZb4"
@@ -133,6 +147,7 @@ def parse_metar(metar):
         "minute": None,
         "wind_dir": None,
         "wind_speed_kt": None,
+        "wind_gust_kt": None,
         "visibility_m": None,
         "weather": None,
         "cloud": None,
@@ -171,9 +186,19 @@ def parse_metar(metar):
             data["hour"] = part[2:4]
             data["minute"] = part[4:6]
 
-        if part.endswith("KT") and len(part) >= 7:
-            data["wind_dir"] = part[0:3]
-            data["wind_speed_kt"] = part[3:5]
+        # WIND PARSER (robust aviation parser)
+        if part.endswith("KT"):
+
+            wind_match = re.match(r"^(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?KT$", part)
+
+            if wind_match:
+                data["wind_dir"] = wind_match.group(1)
+                data["wind_speed_kt"] = wind_match.group(2)
+
+                if wind_match.group(4):
+                    data["wind_gust_kt"] = wind_match.group(4)
+                else:
+                    data["wind_gust_kt"] = None
 
         if part.isdigit() and len(part) == 4:
             data["visibility_m"] = int(part)
@@ -273,9 +298,12 @@ def format_parsed_for_display(parsed):
     # Station
     display["station"] = parsed.get("station") or "-"
     
-    # Wind - format: 000°/00KT
+    # Wind - format: 000°/00KT or 000°/00G00KT (with gust)
     if parsed.get("wind_dir") and parsed.get("wind_speed_kt"):
-        display["wind"] = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']} KT"
+        if parsed.get("wind_gust_kt"):
+            display["wind"] = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']}G{parsed['wind_gust_kt']} KT"
+        else:
+            display["wind"] = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']} KT"
     else:
         display["wind"] = "NIL"
     
@@ -684,8 +712,15 @@ def api_metar(station_code):
     
     parsed = parse_metar(metar)
     display = format_parsed_for_display(parsed)
+    
+    # Extract wind direction and speed separately
+    wind_direction = parsed.get("wind_dir") if parsed.get("wind_dir") else None
+    wind_speed = parsed.get("wind_speed_kt") if parsed.get("wind_speed_kt") else None
+    
     return jsonify({
         "wind": display["wind"],
+        "wind_direction": wind_direction,
+        "wind_speed": wind_speed,
         "visibility": display["visibility"],
         "weather": display["weather"],
         "cloud": display["cloud"],
@@ -709,6 +744,15 @@ def api_narrative(station_code):
         "raw": metar,
         "narrative": narrative
     })
+
+# =========================
+# API WIND ROSE - Historical Wind Data
+# =========================
+@app.route("/api/windrose/<station>")
+def windrose_api(station):
+    """API endpoint to get historical wind data for Wind Rose chart"""
+    data = list(wind_history)
+    return jsonify(data)
 
 # =========================
 # HOME ROUTE
@@ -755,6 +799,10 @@ def home():
         parsed = parse_metar(metar)
         qam = generate_qam(station, parsed, metar)
         narrative = generate_metar_narrative(parsed, metar)
+        
+        # Store wind data for Wind Rose
+        store_wind(parsed)
+        
         print(f"[HOME] QAM generated successfully")
     else:
         print("[HOME] No live METAR available, checking CSV history...")

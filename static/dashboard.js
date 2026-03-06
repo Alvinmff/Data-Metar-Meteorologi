@@ -774,6 +774,155 @@ function playNotify() {
 // INITIALIZATION
 // =======================
 
+// =======================
+// WIND COMPASS - Real-Time Wind Direction
+// =======================
+function loadWindCompass() {
+    fetch(`/api/metar/${STATION}`)
+    .then(res => res.json())
+    .then(data => {
+        if (data.error || !data.wind_direction) {
+            console.log("No wind data available for compass");
+            return;
+        }
+
+        let windDir = parseInt(data.wind_direction);
+        let windSpeed = data.wind_speed || 0;
+
+        // Handle VRB (variable) wind
+        if (data.wind_direction === "VRB") {
+            windDir = 0;
+        }
+
+        let trace = {
+            type: "scatterpolar",
+            r: [0, 1],
+            theta: [0, windDir],
+            mode: "lines+markers",
+            line: {
+                color: "red",
+                width: 4
+            },
+            marker: {
+                size: 10,
+                color: "red"
+            },
+            fill: "toself",
+            fillcolor: "rgba(239, 68, 68, 0.2)"
+        };
+
+        let layout = {
+            polar: {
+                bgcolor: 'rgba(0,0,0,0)',
+                angularaxis: {
+                    direction: "clockwise",
+                    rotation: 90,
+                    tickmode: "array",
+                    tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+                    ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+                    tickfont: { size: 14, color: '#0c4a6e', weight: 'bold' }
+                },
+                radialaxis: {
+                    visible: false
+                }
+            },
+            showlegend: false,
+            margin: { t: 30, b: 30, l: 30, r: 30 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            annotations: [{
+                text: `<b>${windDir}°</b><br>${windSpeed} kt`,
+                showarrow: false,
+                font: {
+                    size: 24,
+                    color: '#0c4a6e',
+                    weight: 'bold'
+                },
+                y: 0.5,
+                x: 0.5,
+                xref: 'paper',
+                yref: 'paper'
+            }]
+        };
+
+        Plotly.newPlot("windCompassChart", [trace], layout, {responsive: true});
+    })
+    .catch(error => {
+        console.error("Error loading Wind Compass:", error);
+    });
+}
+
+// =======================
+// WIND ROSE - Historical Wind Data (Without Grid Lines)
+// =======================
+function loadWindRose() {
+    fetch(`/api/windrose/${STATION}`)
+    .then(res => res.json())
+    .then(data => {
+        if (!data || data.length === 0) {
+            console.log("No wind history data available");
+            return;
+        }
+
+        let directions = data.map(d => d.dir);
+        let speeds = data.map(d => d.speed);
+
+        // Create barpolar trace for Wind Rose
+        let trace = {
+            type: "barpolar",
+            r: speeds,
+            theta: directions,
+            marker: {
+                color: speeds,
+                colorscale: "Viridis",
+                showscale: true,
+                colorbar: {
+                    title: "Speed (kt)",
+                    thickness: 15,
+                    len: 0.5
+                }
+            },
+            opacity: 0.85
+        };
+
+        let layout = {
+            polar: {
+                bgcolor: 'rgba(0,0,0,0)',
+                angularaxis: {
+                    direction: "clockwise",
+                    rotation: 90,
+                    tickmode: "array",
+                    tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+                    ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+                    tickfont: { size: 12, color: '#0c4a6e' }
+                },
+                radialaxis: {
+                    showgrid: false,   // ❌ hapus garis lingkaran
+                    ticks: '',
+                    showline: false,
+                    visible: false
+                }
+            },
+            showlegend: false,
+            margin: { t: 20, b: 40, l: 40, r: 40 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)'
+        };
+
+        // Use the new chart element
+        Plotly.newPlot("windRoseChartNew", [trace], layout, {responsive: true});
+    })
+    .catch(error => {
+        console.error("Error loading Wind Rose:", error);
+    });
+}
+
+// Auto-refresh Wind Compass every 5 seconds
+setInterval(loadWindCompass, 5000);
+
+// Auto-refresh Wind Rose every 10 seconds
+setInterval(loadWindRose, 10000);
+
 document.addEventListener("DOMContentLoaded", function() {
     // Initial animations
     const cards = document.querySelectorAll('.card-custom');
@@ -790,6 +939,10 @@ document.addEventListener("DOMContentLoaded", function() {
     // Create and update charts
     createCharts();
     updateCharts();
+    
+    // Load Wind Rose and Wind Compass from historical data
+    loadWindRose();
+    loadWindCompass();
 
     if (typeof STATION !== 'undefined' && STATION) {
         fetchMetar();
