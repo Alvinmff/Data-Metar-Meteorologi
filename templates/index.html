@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 </head>
 <body>
 
@@ -101,7 +101,7 @@
     <!-- QAM DISPLAY -->
     {% if qam %}
     <div class="card-custom">
-        <h5>QAM Report</h5>
+        <h5>QAM/MET Report</h5>
         <pre id="qamDisplay">{{ qam }}</pre>
 
         <button onclick="copyQamToClipboard()" class="btn-outline-custom mt-2">
@@ -147,46 +147,7 @@
         </div>
     </div>
 
-    <!-- CHARTS -->
-    <div class="row mt-4">
-        <div class="col-md-6">
-            <div class="card-custom">
-                <h5 class="chart-title">Temperature Trend</h5>
-                <div class="chart-container">
-                    <canvas id="tempChart"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-6">
-            <div class="card-custom">
-                <h5 class="chart-title">Pressure Trend</h5>
-                <div class="chart-container">
-                    <canvas id="pressureChart"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="row mt-4">
-        <div class="col-md-6">
-            <div class="card-custom">
-                <h5>Wind Speed Trend</h5>
-                <div class="chart-container">
-                    <canvas id="windChart"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-6">
-            <div class="card-custom">
-                <h5>Wind Rose (24h Historical)</h5>
-                <div id="windRoseChart" style="height: 350px;"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- WIND COMPASS + WIND ROSE SEPARATED -->
+    <!-- WIND COMPASS + WIND ROSE -->
     <div class="row mt-4">
         <div class="col-md-6">
             <div class="card-custom text-center">
@@ -198,7 +159,41 @@
         <div class="col-md-6">
             <div class="card-custom text-center">
                 <h5>Wind Rose (Historical)</h5>
-                <div id="windRoseChartNew" style="height: 350px;"></div>
+                <div id="windRoseChart" style="height: 350px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CHARTS -->
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card-custom">
+                <h5 class="chart-title">Temperature Trend</h5>
+                <div class="chart-container">
+                    <canvas id="tempChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card-custom">
+                <h5 class="chart-title">Pressure Trend</h5>
+                <div class="chart-container">
+                    <canvas id="pressureChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-md-12">
+            <div class="card-custom">
+                <h5>Wind Speed Trend</h5>
+                <div class="chart-container">
+                    <canvas id="windChart"></canvas>
+                </div>
             </div>
         </div>
     </div>

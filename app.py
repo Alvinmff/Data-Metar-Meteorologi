@@ -30,7 +30,7 @@ def store_wind(parsed):
             "dir": int(parsed["wind_dir"]),
             "speed": float(parsed["wind_speed_kt"])
         })
-        print(f"[WIND] Stored: dir={parsed['wind_dir']}, speed={parsed['wind_speed_kt']} kt")
+        print(f"[WIND] Stored: dir={parsed['wind_dir']}, speed={parsed['wind_speed_kt']}kt")
 
 
 FONNTE_TOKEN = "iNQh3nXPgRFpShmXvZb4"
@@ -217,7 +217,9 @@ def parse_metar(metar):
             data["dewpoint_c"] = d
 
         if part.startswith("Q"):
-            data["pressure_hpa"] = part[1:]
+            qnh_match = re.match(r"Q(\d{4})", part)
+            if qnh_match:
+                data["pressure_hpa"] = qnh_match.group(1)
 
         if part == "NOSIG":
             data["trend"] = part
@@ -301,9 +303,9 @@ def format_parsed_for_display(parsed):
     # Wind - format: 000°/00KT or 000°/00G00KT (with gust)
     if parsed.get("wind_dir") and parsed.get("wind_speed_kt"):
         if parsed.get("wind_gust_kt"):
-            display["wind"] = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']}G{parsed['wind_gust_kt']} KT"
+            display["wind"] = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']}G{parsed['wind_gust_kt']}KT"
         else:
-            display["wind"] = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']} KT"
+            display["wind"] = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']}KT"
     else:
         display["wind"] = "NIL"
     
@@ -701,30 +703,95 @@ def api_history():
     return jsonify({"data": history_data})
 
 # =========================
-# API GET METAR DATA
+# API GET METAR HISTORY FOR CHARTS
+# =========================
+@app.route("/api/metar/history")
+def api_metar_history():
+    """API endpoint to get history data for charts (temp, pressure, wind, gust)"""
+    if not os.path.exists(CSV_FILE):
+        return jsonify({"data": []})
+
+    df = pd.read_csv(CSV_FILE).tail(30)
+
+    df["time"] = pd.to_datetime(df["time"])
+    df = df.sort_values("time")
+
+    df["metar"] = df["metar"].fillna("").astype(str)
+
+    history_data = []
+    for _, row in df.iterrows():
+        metar = row["metar"]
+        
+        # Extract temperature
+        temp = 0
+        temp_match = re.search(r'(\d{2})/(\d{2})', metar)
+        if temp_match:
+            temp = int(temp_match.group(1))
+        
+        # Extract pressure
+        pressure = 0
+        qnh_match = re.search(r'Q(\d{4})', metar)
+        if qnh_match:
+            pressure = int(qnh_match.group(1))
+        
+        # Extract wind speed and gust
+        wind = 0
+        gust = None
+        wind_match = re.search(r'(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?KT', metar)
+        if wind_match:
+            wind = int(wind_match.group(2))
+            if wind_match.group(4):
+                gust = int(wind_match.group(4))
+        
+        history_data.append({
+            "time": str(row["time"]),
+            "temp": temp,
+            "pressure": pressure,
+            "wind": wind,
+            "gust": gust
+        })
+
+    return jsonify({"data": history_data})
+
+# =========================
+# API GET METAR (Single)
 # =========================
 @app.route("/api/metar/<station_code>")
-def api_metar(station_code):
-    """API endpoint to get current METAR data for a station"""
+def api_metar_single(station_code):
+
     metar = get_metar(station_code.upper())
     if not metar:
         return jsonify({"error": "No METAR available"})
     
     parsed = parse_metar(metar)
-    display = format_parsed_for_display(parsed)
-    
-    # Extract wind direction and speed separately
-    wind_direction = parsed.get("wind_dir") if parsed.get("wind_dir") else None
-    wind_speed = parsed.get("wind_speed_kt") if parsed.get("wind_speed_kt") else None
-    
+
+    wind_direction = parsed.get("wind_dir")
+    wind_speed = parsed.get("wind_speed_kt")
+
+    if wind_direction == "VRB":
+        wind_direction = "VRB"
+
+    # format wind
+    wind_text = None
+    if parsed.get("wind_dir") and parsed.get("wind_speed_kt"):
+        if parsed.get("wind_gust_kt"):
+            wind_text = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']}G{parsed['wind_gust_kt']}KT"
+        else:
+            wind_text = f"{parsed['wind_dir']}°/{parsed['wind_speed_kt']}KT"
+
     return jsonify({
-        "wind": display["wind"],
-        "wind_direction": wind_direction,
-        "wind_speed": wind_speed,
-        "visibility": display["visibility"],
-        "weather": display["weather"],
-        "cloud": display["cloud"],
-        "qnh": display["qnh"]
+        "station": parsed.get("station"),
+        "raw": metar,
+        "wind": parsed.get("wind"),
+        "wind_direction": parsed.get("wind_dir"),
+        "wind_speed": parsed.get("wind_speed_kt"),
+        "wind_gust": parsed.get("wind_gust_kt"),
+        "visibility": format_visibility(parsed.get("visibility_m")),
+        "weather": parsed.get("weather") or "NIL",
+        "cloud": parsed.get("cloud") or "NIL",
+        "qnh": parsed.get("pressure_hpa") or "NIL",
+        "temp": parsed.get("temperature_c"),
+        "dewpoint": parsed.get("dewpoint_c")
     })
 
 # =========================
@@ -836,10 +903,11 @@ def home():
             labels = history['time'].tolist()
             temps = [extract_temp(m) for m in history['metar'].tolist()]
             pressures = [extract_pressure(m) for m in history['metar'].tolist()]
+
             # Reverse data so newest is at the top in table (charts show oldest->newest left to right)
-            labels = labels[::-1]
-            temps = temps[::-1]
-            pressures = pressures[::-1]
+            labels = history['time'].tolist()
+            temps = [extract_temp(m) for m in history['metar'].tolist()]
+            pressures = [extract_pressure(m) for m in history['metar'].tolist()]
         else:
             labels = []
     else:
@@ -1001,6 +1069,10 @@ def background_metar_loop():
                     print("🔥 NEW METAR SAVED & EMITTED via WebSocket!")
 
                     parsed = parse_metar(metar)
+
+                    # 🔥 simpan ke wind history
+                    store_wind(parsed)
+
                     qam = generate_qam(station, parsed, metar)
                     narrative = generate_metar_narrative(parsed, metar)
                     
@@ -1008,12 +1080,15 @@ def background_metar_loop():
                     print(f"[LOOP] Narrative generated:\n{narrative}")
 
                     socketio.emit("metar_update", {
-                        "status": "new",
-                        "qam": qam,
-                        "raw": metar,
-                        "narrative": narrative,
-                        "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-                    })
+                    "status": "new",
+                    "qam": qam,
+                    "raw": metar,
+                    "narrative": narrative,
+                    "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+                    "wind_dir": parsed.get("wind_dir"),
+                    "wind_speed": parsed.get("wind_speed_kt"),
+                    "wind_gust": parsed.get("wind_gust_kt")
+                })
                 else:
                     print("[LOOP] METAR unchanged, skipping save")
             else:
@@ -1024,8 +1099,8 @@ def background_metar_loop():
             import traceback
             traceback.print_exc()
 
-        print(f"[LOOP] Sleeping for 60 seconds...")
-        socketio.sleep(60)  # WAJIB ini, bukan time.sleep
+        print(f"[LOOP] Sleeping for 80 seconds...")
+        socketio.sleep(80)  # WAJIB ini, bukan time.sleep
 
 #connect websocket
 @socketio.on("connect")
