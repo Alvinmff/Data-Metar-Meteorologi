@@ -7,6 +7,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
@@ -69,6 +70,68 @@
     </div>
 
     {% if results is not none %}
+    <!-- CHARTS SECTION -->
+    {% if labels and labels|length > 0 %}
+    
+    <!-- Period Info -->
+    <div class="card-custom">
+        <h3>📊 History METAR {{station}}</h3>
+        {% if start_date and end_date %}
+        <div style="background:#eef;padding:10px;border-radius:6px;margin-bottom:10px">
+            📅 Menampilkan data dari <b>{{start_date.replace('T', ' ')}}</b> sampai <b>{{end_date.replace('T', ' ')}}</b>
+        </div>
+        {% endif %}
+    </div>
+    
+    <!-- CHARTS IN 2-COLUMN GRID -->
+    <div class="row mb-4">
+        <!-- Temperature Chart -->
+        <div class="col-md-6 mb-4">
+            <div class="card-custom">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5>🌡️ Temperature</h5>
+                    <button class="btn-sm-custom" onclick="downloadChart('tempChart')">📥 Download</button>
+                </div>
+                <canvas id="tempChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Pressure Chart -->
+        <div class="col-md-6 mb-4">
+            <div class="card-custom">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5>📊 Pressure (QNH)</h5>
+                    <button class="btn-sm-custom" onclick="downloadChart('pressureChart')">📥 Download</button>
+                </div>
+                <canvas id="pressureChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Wind Chart -->
+        <div class="col-md-12 mb-4">
+            <div class="card-custom">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5>💨 Wind Speed</h5>
+                    <button class="btn-sm-custom" onclick="downloadChart('windChart')">📥 Download</button>
+                </div>
+                <canvas id="windChart"></canvas>
+            </div>
+        </div>
+        
+        <!-- Wind Rose -->
+        <div class="col-md-12 mb-4">
+            <div class="card-custom">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h5>🧭 Wind Rose (Filtered Period)</h5>
+                    <button class="btn-sm-custom" onclick="downloadChart('windRoseChart')">📥 Download</button>
+                </div>
+                <div id="windRoseHistory"></div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- TABLE SECTION -->
     <div class="card-custom">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h5>📊 History Results - {{ station }}</h5>
@@ -107,6 +170,186 @@
 </div>
 
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<!-- CHART.JS AND DOWNLOAD FUNCTIONALITY -->
+{% if labels and labels|length > 0 %}
+<script>
+// Get data from Flask template
+const labels = {{ labels | tojson }};
+const temps = {{ temps | tojson }};
+const pressures = {{ pressures | tojson }};
+const winds = {{ winds | tojson }};
+const gusts = {{ gusts | tojson }};
+const thunder_flags = {{ thunder_flags | tojson }};
+const wind_dirs = {{ wind_dirs | tojson }};
+
+if(labels.length > 0){
+    // Temperature Chart with Thunderstorm Highlighting
+    new Chart(document.getElementById("tempChart"),{
+        type:"line",
+        data:{
+            labels:labels,
+            datasets:[{
+                label:"Temperature (°C)",
+                data:temps,
+                borderColor: temps.map((t,i) => thunder_flags[i] ? "#8b5cf6" : "#ff6384"),
+                backgroundColor: temps.map((t,i) => thunder_flags[i] ? "rgba(139, 92, 246, 0.2)" : "rgba(255, 99, 132, 0.1)"),
+                pointBackgroundColor: temps.map((t,i) => thunder_flags[i] ? "#8b5cf6" : "#ff6384"),
+                pointRadius: temps.map((t,i) => thunder_flags[i] ? 8 : 4),
+                fill:true,
+                tension:0.4
+            }]
+        },
+        options:{
+            responsive:true,
+            plugins:{
+                legend:{display:true}
+            },
+            scales:{
+                y:{
+                    title:{display:true,text:"Temperature (°C)"}
+                }
+            }
+        }
+    });
+
+    // Pressure Chart
+    new Chart(document.getElementById("pressureChart"),{
+        type:"line",
+        data:{
+            labels:labels,
+            datasets:[{
+                label:"Pressure QNH (hPa)",
+                data:pressures,
+                borderColor:"#36a2eb",
+                backgroundColor:"rgba(54, 162, 235, 0.1)",
+                fill:true,
+                tension:0.4
+            }]
+        },
+        options:{
+            responsive:true,
+            plugins:{
+                legend:{display:true}
+            },
+            scales:{
+                y:{
+                    title:{display:true,text:"Pressure (hPa)"}
+                }
+            }
+        }
+    });
+
+    // Wind Chart
+    new Chart(document.getElementById("windChart"),{
+        type:"line",
+        data:{
+            labels:labels,
+            datasets:[
+                {
+                    label:"Wind Speed (KT)",
+                    data:winds,
+                    borderColor:"#ffcc00",
+                    backgroundColor:"rgba(255, 204, 0, 0.1)",
+                    fill:true,
+                    tension:0.4
+                },
+                {
+                    label:"Wind Gust (KT)",
+                    data:gusts,
+                    borderColor:"#ff6384",
+                    backgroundColor:"rgba(255, 99, 132, 0.1)",
+                    fill:true,
+                    tension:0.4
+                }
+            ]
+        },
+        options:{
+            responsive:true,
+            plugins:{
+                legend:{display:true}
+            },
+            scales:{
+                y:{
+                    title:{display:true,text:"Speed (KT)"}
+                }
+            }
+        }
+    });
+    
+    // Wind Rose using Plotly
+    const validWindData = wind_dirs.map((dir, i) => {
+        return dir !== null && winds[i] !== null ? {dir: parseInt(dir), speed: winds[i]} : null;
+    }).filter(item => item !== null);
+    
+    if(validWindData.length > 0){
+        const roseDirs = validWindData.map(d => d.dir);
+        const roseSpeeds = validWindData.map(d => d.speed);
+        
+        const roseData = [{
+            type: "barpolar",
+            r: roseSpeeds,
+            theta: roseDirs,
+            marker: {
+                color: roseSpeeds,
+                colorscale: "Jet",
+                showscale: true,
+                colorbar: {
+                    title: "Speed (KT)",
+                    thickness: 15,
+                    len: 0.75
+                }
+            },
+            hovertemplate: "Direction: %{theta}°<br>Speed: %{r} KT<extra></extra>"
+        }];
+
+        const layout = {
+            polar: {
+                bgcolor: 'rgba(255,255,255,0.3)',
+                angularaxis: {
+                    direction: "clockwise",
+                    rotation: 90,
+                    tickmode: "array",
+                    tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+                    ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+                    tickfont: { size: 12, color: '#0c4a6e', weight: 'bold' }
+                },
+                radialaxis: {
+                    showgrid: true,
+                    gridcolor: 'rgba(14, 165, 233, 0.2)',
+                    title: "Speed (KT)"
+                }
+            },
+            showlegend: false,
+            margin: {t: 30, b: 30, l: 50, r: 50}
+        };
+
+        Plotly.newPlot("windRoseHistory", roseData, layout);
+    }
+}
+
+// Download Chart Function
+function downloadChart(chartId){
+    // Check if it's a Plotly chart (Wind Rose)
+    if(chartId === 'windRoseChart'){
+        Plotly.downloadImage("windRoseHistory", {format: 'png', width: 800, height: 600, filename: 'windRoseChart'});
+        return;
+    }
+    
+    const canvas = document.getElementById(chartId);
+    if (!canvas) {
+        console.error("Canvas not found:", chartId);
+        return;
+    }
+    
+    const link = document.createElement('a');
+    link.download = chartId + "_" + new Date().toISOString().slice(0,10) + ".png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+}
+</script>
+{% endif %}
+
 <script>
 const socket = io();
 

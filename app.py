@@ -989,6 +989,15 @@ def history_by_date():
 
     results = None
     station = "WARR"  # Default station
+    labels = []
+    temps = []
+    pressures = []
+    winds = []
+    gusts = []
+    thunder_flags = []
+    wind_dirs = []
+    start_date = ""
+    end_date = ""
 
     if request.method == "POST":
         station = request.form.get("icao", "WARR").upper()
@@ -1021,13 +1030,59 @@ def history_by_date():
                 ]
                 
                 print(f"[HISTORY] Filtered rows: {len(results) if results is not None else 0}")
+                
+                # Extract chart data if results exist
+                if results is not None and not results.empty:
+                    results = results.sort_values("time")  # Sort by time for chart
+                    
+                    for _, row in results.iterrows():
+                        metar = str(row["metar"]) if pd.notna(row["metar"]) else ""
+                        
+                        # Format time for label
+                        labels.append(str(row["time"]))
+                        
+                        # Extract temperature (format: XX/XX)
+                        temp_match = re.search(r'(\d{2})/(\d{2})', metar)
+                        temps.append(int(temp_match.group(1)) if temp_match else None)
+                        
+                        # Extract pressure (QNH format: QXXXX)
+                        qnh_match = re.search(r'Q(\d{4})', metar)
+                        pressures.append(int(qnh_match.group(1)) if qnh_match else None)
+                        
+                        # Extract wind speed, gust, and direction
+                        wind_match = re.search(r'(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?KT', metar)
+                        
+                        if wind_match:
+                            wind_dir = wind_match.group(1)
+                            wind_dirs.append(wind_dir if wind_dir != "VRB" else None)
+                            winds.append(int(wind_match.group(2)))
+                            gusts.append(int(wind_match.group(4)) if wind_match.group(4) else None)
+                        else:
+                            wind_dirs.append(None)
+                            winds.append(None)
+                            gusts.append(None)
+                        
+                        # Detect thunderstorm
+                        thunder_codes = ["TS", "TSRA", "VCTS", "+TS", "TSGR", "-TS", "+TSRA", "-TSRA"]
+                        thunder_flags.append(any(code in metar for code in thunder_codes))
+                    
+                    print(f"[HISTORY] Chart data extracted: {len(labels)} points")
             else:
                 print("[HISTORY] CSV file does not exist")
 
     return render_template(
         "history_by_date.html",
         results=results,
-        station=station
+        station=station,
+        labels=labels,
+        temps=temps,
+        pressures=pressures,
+        winds=winds,
+        gusts=gusts,
+        thunder_flags=thunder_flags,
+        wind_dirs=wind_dirs,
+        start_date=start_date,
+        end_date=end_date
     )
 
 
