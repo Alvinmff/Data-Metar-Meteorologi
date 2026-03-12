@@ -23,14 +23,57 @@ CSV_FILE = "metar_history.csv"
 wind_history = deque(maxlen=500)
 
 # Store wind data for Wind Rose
-def store_wind(parsed):
-    if parsed["wind_dir"] and parsed["wind_speed_kt"]:
+def store_wind(parsed, station="WARR"):
+    # Skip if wind direction is "VRB" (variable) or missing
+    wind_dir = parsed.get("wind_dir")
+    if not wind_dir or wind_dir == "VRB" or not parsed.get("wind_speed_kt"):
+        return
+    
+    try:
         wind_history.append({
-            "time": datetime.utcnow(),
-            "dir": int(parsed["wind_dir"]),
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "station": station,
+            "dir": int(wind_dir),
             "speed": float(parsed["wind_speed_kt"])
         })
-        print(f"[WIND] Stored: dir={parsed['wind_dir']}, speed={parsed['wind_speed_kt']}kt")
+        # print(f"[WIND] Stored: dir={wind_dir}, speed={parsed['wind_speed_kt']}kt")
+    except (ValueError, TypeError) as e:
+        pass
+
+def load_wind_history():
+    """Load historical wind data from CSV into memory for Wind Rose"""
+    if not os.path.exists(CSV_FILE):
+        return
+    try:
+        df = pd.read_csv(CSV_FILE)
+        if df.empty:
+            return
+        
+        # Take last 500 rows for the Wind Rose
+        df = df.tail(500)
+        
+        count = 0
+        for _, row in df.iterrows():
+            metar = str(row["metar"]) if pd.notna(row["metar"]) else ""
+            if not metar:
+                continue
+            
+            # Use regex to quickly extract wind dir and speed
+            wind_match = re.search(r'\b(\d{3})(\d{2,3})(G\d{2,3})?KT\b', metar)
+            if wind_match:
+                try:
+                    wind_history.append({
+                        "time": str(row["time"]),
+                        "station": row["station"],
+                        "dir": int(wind_match.group(1)),
+                        "speed": float(wind_match.group(2))
+                    })
+                    count += 1
+                except (ValueError, TypeError):
+                    continue
+        print(f"✅ Loaded {count} wind records from {CSV_FILE} for Wind Rose")
+    except Exception as e:
+        print(f"❌ Failed to load wind history: {e}")
 
 
 FONNTE_TOKEN = "iNQh3nXPgRFpShmXvZb4"
@@ -791,7 +834,9 @@ def api_metar_single(station_code):
         "cloud": parsed.get("cloud") or "NIL",
         "qnh": parsed.get("pressure_hpa") or "NIL",
         "temp": parsed.get("temperature_c"),
-        "dewpoint": parsed.get("dewpoint_c")
+        "dewpoint": parsed.get("dewpoint_c"),
+        "visibility_m": parsed.get("visibility_m"),
+        "status": parsed.get("status", "normal")
     })
 
 # =========================
@@ -810,6 +855,34 @@ def api_narrative(station_code):
     return jsonify({
         "raw": metar,
         "narrative": narrative
+    })
+
+# =========================
+# API CROSSWIND CALCULATOR
+# =========================
+@app.route("/api/crosswind")
+def api_crosswind():
+    """Calculate crosswind components"""
+    wind_dir = request.args.get('wind_dir', type=int)
+    wind_speed = request.args.get('wind_speed', type=float)
+    runway_heading = request.args.get('runway_heading', type=int)
+    
+    if wind_dir is None or wind_speed is None or runway_heading is None:
+        return jsonify({"error": "Missing parameters"}), 400
+    
+    angle_rad = math.radians(wind_dir - runway_heading)
+    headwind = round(wind_speed * math.cos(angle_rad), 1)
+    crosswind = round(abs(wind_speed * math.sin(angle_rad)), 1)
+    tailwind = round(abs(headwind), 1) if headwind < 0 else 0
+    headwind_val = headwind if headwind > 0 else 0
+    
+    return jsonify({
+        "headwind": headwind_val,
+        "crosswind": crosswind,
+        "tailwind": tailwind,
+        "wind_dir": wind_dir,
+        "wind_speed": wind_speed,
+        "runway_heading": runway_heading
     })
 
 # =========================
@@ -868,7 +941,7 @@ def home():
         narrative = generate_metar_narrative(parsed, metar)
         
         # Store wind data for Wind Rose
-        store_wind(parsed)
+        store_wind(parsed, station)
         
         print(f"[HOME] QAM generated successfully")
     else:
@@ -1126,7 +1199,7 @@ def background_metar_loop():
                     parsed = parse_metar(metar)
 
                     # 🔥 simpan ke wind history
-                    store_wind(parsed)
+                    store_wind(parsed, station)
 
                     qam = generate_qam(station, parsed, metar)
                     narrative = generate_metar_narrative(parsed, metar)
@@ -1142,7 +1215,14 @@ def background_metar_loop():
                     "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
                     "wind_dir": parsed.get("wind_dir"),
                     "wind_speed": parsed.get("wind_speed_kt"),
-                    "wind_gust": parsed.get("wind_gust_kt")
+                    "wind_gust": parsed.get("wind_gust_kt"),
+                    "temp": parsed.get("temperature_c"),
+                    "dewpoint": parsed.get("dewpoint_c"),
+                    "visibility_m": parsed.get("visibility_m"),
+                    "cloud": parsed.get("cloud"),
+                    "qnh": parsed.get("pressure_hpa"),
+                    "weather": parsed.get("weather"),
+                    "metar_status": parsed.get("status", "normal")
                 })
                 else:
                     print("[LOOP] METAR unchanged, skipping save")
@@ -1219,6 +1299,9 @@ def handle_connect():
 background_thread = None
 
 if __name__ == "__main__":
+    # Pre-populate wind history for Wind Rose
+    load_wind_history()
+
     if background_thread is None:
         background_thread = socketio.start_background_task(background_metar_loop)
 

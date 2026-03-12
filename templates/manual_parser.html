@@ -1,277 +1,161 @@
 <!DOCTYPE html>
-<html>
-<head>
-    <title>Manual Parser - METAR Data Processing & Visualization Platform</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en">
 
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Manual Parser — METAR Auto Dashboard</title>
+    <meta name="description" content="Manual METAR Parser & QAM Converter - BMKG Aviation">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
+
 <body>
 
-<div class="dashboard-container">
+    <audio id="lowVisSound" src="{{ url_for('static', filename='alarm.mp3') }}" preload="auto"></audio>
+    <audio id="newDataSound" src="{{ url_for('static', filename='notify.mp3') }}" preload="auto"></audio>
 
-    <!-- HEADER -->
-    <div class="dashboard-header">
-        <div class="d-flex justify-content-between align-items-center">
-            <div class="d-flex align-items-center">
-                <img src="https://yt3.googleusercontent.com/irzhWXcNV6M94Ow6P2ytjC2HFi7gVbLbkq2wcgwOyie63VkKHBiWUw1XJjc1NJUeWwgFwsWjYw=s900-c-k-c0x00ffffff-no-rj" 
-                     alt="BMKG Juanda Logo" 
-                     class="bmkg-logo me-3"
-                     style="height: 80px; object-fit: contain;">
-                <div>
-                    <h2>METAR Data Processing & Visualization Platform</h2>
-                    <h3>Weather: <span id="weather-icon" class="weather-icon">☀️</span></h3>
-                    <small id="lastUpdate" class="last-update">Manual METAR Parser</small>
+    <div class="app-layout" id="appLayout">
+
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="header-left">
+                <button class="sidebar-toggle" id="sidebarToggle" title="Toggle Sidebar">☰</button>
+                <img src="https://yt3.googleusercontent.com/irzhWXcNV6M94Ow6P2ytjC2HFi7gVbLbkq2wcgwOyie63VkKHBiWUw1XJjc1NJUeWwgFwsWjYw=s900-c-k-c0x00ffffff-no-rj"
+                    alt="BMKG Logo" class="header-logo">
+                <div class="header-title">
+                    <h1>METAR Auto Dashboard</h1>
+                    <span class="station-badge">🔧 Manual METAR Parser</span>
                 </div>
             </div>
-            <div id="status-indicator" class="status-indicator">
-                <span class="offline-dot"></span> OFFLINE
+            <div class="header-right">
+                <div class="wib-clock" id="wibClock">--:--:-- <small>WIB</small></div>
+                <div class="utc-clock" id="utcClock">--:--:-- <small>UTC</small></div>
+                <button class="sound-toggle" id="soundToggle" onclick="enableSound()">🔇 Sound</button>
+                <div class="connection-status" id="connectionStatus">
+                    <span class="connection-dot" id="connectionDot"></span>
+                    <span id="connectionText">OFFLINE</span>
+                </div>
             </div>
-        </div>
+        </header>
+
+        <!-- SIDEBAR -->
+        <aside class="app-sidebar" id="appSidebar">
+            <!-- Airplane Decoration -->
+            <div class="airplane-decor-container fade-in" style="animation-delay:0.08s">
+                <img src="{{ url_for('static', filename='images/pesawat.png') }}" alt="Airplane Decor"
+                    class="dashboard-airplane-img">
+            </div>
+            <nav class="sidebar-nav">
+                <a href="/" class="sidebar-link" id="nav-dashboard">
+                    <span class="icon">🏠</span>
+                    <span class="label">Dashboard</span>
+                </a>
+                <a href="/history_by_date" class="sidebar-link" id="nav-history">
+                    <span class="icon">📊</span>
+                    <span class="label">History</span>
+                </a>
+                <a href="/manual_parser" class="sidebar-link active" id="nav-qam">
+                    <span class="icon">📄</span>
+                    <span class="label">Manual Parser</span>
+                </a>
+            </nav>
+            <!--<div class="sidebar-footer">
+            <a href="#" class="sidebar-link" onclick="return false;">
+                <span class="icon">❓</span>
+                <span class="label">Help</span>
+            </a>
+        </div> -->
+        </aside>
+
+        <!-- MAIN -->
+        <main class="app-main">
+
+            <div class="card fade-in">
+                <div class="card-header">
+                    <h3 class="card-title"><span class="icon">🔧</span> Manual METAR Converter</h3>
+                </div>
+
+                <form method="post">
+                    <div class="form-group mb-lg">
+                        <label for="rawMetar">Paste METAR Data</label>
+                        <textarea name="raw_metar" id="rawMetar" class="form-input" rows="4"
+                            placeholder="Paste METAR here... (contoh: METAR WARR 121755Z 08004KT 9999 FEW020CB 27/24 Q1008)"
+                            style="font-family:'JetBrains Mono',monospace;resize:vertical;"
+                            required>{{ raw_metar or '' }}</textarea>
+                    </div>
+
+                    <div id="metarError" class="hidden"
+                        style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:12px 16px;border-radius:var(--radius-md);margin-bottom:var(--space-md);font-size:0.9rem;font-weight:600;">
+                        ⚠️ Format METAR tidak valid! Harap masukkan data METAR yang benar.
+                    </div>
+
+                    <button class="btn btn-primary" id="convertBtn" disabled>🔄 Convert METAR</button>
+                </form>
+
+                {% if parsed_qam %}
+                <hr style="margin:var(--space-xl) 0;border-color:var(--border-color);">
+
+                <div class="card-header">
+                    <h3 class="card-title"><span class="icon">📝</span> Converted QAM</h3>
+                    <div class="flex gap-sm">
+                        <button class="btn btn-sm btn-outline" onclick="copyQam()">📋 Copy</button>
+                    </div>
+                </div>
+                <pre class="qam-display" id="qamDisplay">{{ parsed_qam }}</pre>
+                <span class="copy-feedback" id="qamCopyFeedback">Copied!</span>
+                {% endif %}
+            </div>
+
+        </main>
     </div>
 
-    <!-- NAVBAR -->
-    <div class="dashboard-navbar">
-        <div class="nav-left">
-            <span class="nav-icon">✈️</span> Aviation Weather Monitoring
-        </div>
-        <div class="nav-right">
-            <a href="/" class="nav-btn">📊 Monitoring</a>
-            <a href="/history_by_date" class="nav-btn">📅 History</a>
-            <a href="/manual_parser" class="nav-btn">🔧 Manual Parser</a>
-        </div>
-    </div>
+    <script>
+        // METAR Validation
+        document.addEventListener('DOMContentLoaded', function () {
+            const textarea = document.getElementById('rawMetar');
+            const button = document.getElementById('convertBtn');
+            const errorMsg = document.getElementById('metarError');
 
-    <!-- MANUAL PARSER FORM -->
-    <div class="card-custom">
-        <h5>🔧 Manual METAR Converter</h5>
-
-        <form method="post">
-            <div class="mb-3">
-                <textarea name="raw_metar"
-                id="rawMetar"
-                class="form-control"
-                rows="4"
-                placeholder="Paste METAR here... (contoh: METAR WARR 121755Z 08004KT 9999 FEW020CB 27/24 Q1008)"
-                style="background: var(--glass-bg); border: 2px solid var(--glass-border); border-radius: 12px; padding: 14px 18px; font-size: 1rem; color: var(--text-dark);"
-                required>{{ raw_metar }}</textarea>
-            </div>
-
-            <div id="metarError" class="alert alert-danger" style="display: none; border-radius: 12px;">
-                Format METAR tidak valid! Harap masukkan data METAR yang benar (contoh: METAR WARR 121755Z 08004KT 9999 FEW020CB 27/24 Q1008).
-            </div>
-
-            <button class="btn-primary-custom" id="convertBtn" disabled>Convert METAR</button>
-        </form>
-
-        {% if parsed_qam %}
-        <hr style="margin: 24px 0; border-color: var(--glass-border);">
-        
-        <h5>📝 Converted QAM:</h5>
-        <pre id="qamDisplay" style="
-            background: linear-gradient(135deg, rgba(240, 249, 255, 0.8), rgba(255, 255, 255, 0.8));
-            border-radius: 12px;
-            padding: 16px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.95rem;
-            color: var(--text-dark);
-            border: 1px solid var(--glass-border);
-            max-height: 300px;
-            overflow-y: auto;
-        ">{{ parsed_qam }}</pre>
-
-        <button onclick="copyQamToClipboard()" class="btn-outline-custom mt-2">
-            📋 Copy Text QAM
-        </button>
-        <span id="copyFeedback" class="copy-feedback ms-2">Copied!</span>
-        {% endif %}
-
-    </div>
-
-</div>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const textarea = document.getElementById('rawMetar');
-    const button = document.getElementById('convertBtn');
-    const errorMsg = document.getElementById('metarError');
-    
-    // More flexible METAR validation pattern
-    // Accepts: ICAO code + time in various formats
-    const metarPattern = /^(METAR\s+)?[A-Z]{4}\s+\d{4,6}(Z|[/]\d{2})?(\s|$)/i;
-    
-    function validateMetar(text) {
-        const trimmed = text.trim();
-        // Check if starts with 4-letter ICAO code
-        if (!/^[A-Z]{4}/i.test(trimmed)) {
-            return false;
-        }
-        // Check if contains time pattern (4-6 digits)
-        if (!/\d{4,6}/.test(trimmed)) {
-            return false;
-        }
-        return true;
-    }
-    
-    function checkInput() {
-        const text = textarea.value.trim();
-        
-        if (text.length > 0) {
-            if (validateMetar(text)) {
-                button.removeAttribute('disabled');
-                if (errorMsg) errorMsg.style.display = 'none';
-            } else {
-                button.setAttribute('disabled', 'disabled');
-                if (errorMsg) errorMsg.style.display = 'block';
+            function validateMetar(text) {
+                const trimmed = text.trim();
+                if (!/^[A-Z]{4}/i.test(trimmed)) return false;
+                if (!/\d{4,6}/.test(trimmed)) return false;
+                return true;
             }
-        } else {
-            button.setAttribute('disabled', 'disabled');
-            if (errorMsg) errorMsg.style.display = 'none';
+
+            function checkInput() {
+                const text = textarea.value.trim();
+                if (text.length > 0) {
+                    if (validateMetar(text)) {
+                        button.removeAttribute('disabled');
+                        errorMsg.classList.add('hidden');
+                    } else {
+                        button.setAttribute('disabled', 'disabled');
+                        errorMsg.classList.remove('hidden');
+                    }
+                } else {
+                    button.setAttribute('disabled', 'disabled');
+                    errorMsg.classList.add('hidden');
+                }
+            }
+
+            textarea.addEventListener('input', checkInput);
+            checkInput();
+        });
+
+        // Copy QAM
+        function copyQam() {
+            const el = document.getElementById('qamDisplay');
+            if (!el) return;
+            navigator.clipboard.writeText(el.textContent).then(() => {
+                const fb = document.getElementById('qamCopyFeedback');
+                if (fb) { fb.classList.add('visible'); setTimeout(() => fb.classList.remove('visible'), 2000); }
+            });
         }
-    }
-    
-    textarea.addEventListener('input', checkInput);
-    checkInput();
-});
-
-function copyQamToClipboard() {
-    const qamElement = document.getElementById('qamDisplay');
-    const qamText = qamElement.innerText;
-    navigator.clipboard.writeText(qamText).then(function() {
-        const feedback = document.getElementById('copyFeedback');
-        feedback.style.display = 'inline';
-        setTimeout(function() {
-            feedback.style.display = 'none';
-        }, 2000);
-    }).catch(function(err) {
-        console.error('Gagal menyalin teks: ', err);
-    });
-}
-</script>
-
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<script>
-const socket = io();
-
-// =======================
-// SOCKET CONNECTION
-// =======================
-
-socket.on("connect", () => {
-    console.log("Connected to WebSocket");
-    const statusEl = document.getElementById("status-indicator");
-    if (statusEl) {
-        statusEl.innerHTML = "<span class='online-dot'></span> LIVE";
-        statusEl.style.animation = "none";
-        setTimeout(() => statusEl.style.animation = "", 10);
-    }
-});
-
-socket.on("disconnect", () => {
-    const statusEl = document.getElementById("status-indicator");
-    if (statusEl) {
-        statusEl.innerHTML = "<span class='offline-dot'></span> OFFLINE";
-    }
-});
-
-socket.on("metar_update", function(data) {
-    console.log("METAR Update received:", data);
-    
-    // Update last update time
-    const now = new Date();
-    const formatted = 
-        now.getDate().toString().padStart(2,'0') + "-" +
-        (now.getMonth()+1).toString().padStart(2,'0') + "-" +
-        now.getFullYear() + " " +
-        now.getHours().toString().padStart(2,'0') + ":" +
-        now.getMinutes().toString().padStart(2,'0') + ":" +
-        now.getSeconds().toString().padStart(2,'0');
-
-    const lastUpdateEl = document.getElementById("lastUpdate");
-    if (lastUpdateEl) {
-        lastUpdateEl.innerText = "Last Update: " + formatted;
-    }
-
-    // Check visibility for low visibility alert
-    if (data.raw) {
-        const visMatch = data.raw.match(/\s(\d{4})\s/);
-        let vis = null;
-
-        if (visMatch) {
-            vis = parseInt(visMatch[1]);
-        }
-
-        if (vis && vis < 3000) {
-            document.body.classList.add('low-visibility');
-            playAlarm();
-        } else {
-            document.body.classList.remove('low-visibility');
-            playNotify();
-        }
-    }
-});
-
-// =======================
-// SOUND FUNCTIONS
-// =======================
-
-let soundEnabled = false;
-
-function enableSound() {
-    soundEnabled = true;
-
-    const audio1 = document.getElementById("lowVisSound");
-    const audio2 = document.getElementById("newDataSound");
-
-    if (audio1) audio1.play().then(() => audio1.pause());
-    if (audio2) audio2.play().then(() => audio2.pause());
-
-    const btn = document.querySelector('.btn-warning');
-    if (btn) {
-        btn.textContent = '🔊 Sound Enabled';
-        btn.style.background = 'linear-gradient(135deg, #22c55e, #4ade80) !important';
-    }
-}
-
-function playAlarm() {
-    if (!soundEnabled) return;
-    const alarmAudio = document.getElementById("lowVisSound");
-    if (alarmAudio) {
-        alarmAudio.currentTime = 0;
-        alarmAudio.play().catch(e => console.error(e));
-    }
-}
-
-function playNotify() {
-    if (!soundEnabled) return;
-    const notifyAudio = document.getElementById("newDataSound");
-    if (notifyAudio) {
-        notifyAudio.currentTime = 0;
-        notifyAudio.play().catch(e => console.error(e));
-    }
-}
-
-// =======================
-// INITIALIZATION
-// =======================
-
-document.addEventListener("DOMContentLoaded", function() {
-    // Initial animations
-    const cards = document.querySelectorAll('.card-custom');
-    cards.forEach((card, index) => {
-        card.style.opacity = '0';
-        card.style.transform = 'translateY(30px)';
-        setTimeout(() => {
-            card.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
-            card.style.opacity = '1';
-            card.style.transform = 'translateY(0)';
-        }, 100 + (index * 100));
-    });
-});
-</script>
+    </script>
+    <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
 
 </body>
+
 </html>
