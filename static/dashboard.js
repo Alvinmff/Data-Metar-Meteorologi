@@ -1,584 +1,813 @@
-let tempChart;
-let pressureChart;
+// ============================================
+// METAR Auto Dashboard v2.0 — BMKG Aviation
+// ============================================
+
+// =======================
+// STATE
+// =======================
+let tempChart = null;
+let pressureChart = null;
 let windChart = null;
-let windRose = null;
-let lastTimestamp = null;
 let lastMetarRaw = null;
-let lowVisTriggered = false;
-let soundEnabled = false;
+let lastMetarStatus = 'normal';
+let lastVisibility = null;
+let lastHasTS = false;
+// Load soundEnabled from localStorage, default false
+let soundEnabled = localStorage.getItem('soundEnabled') === 'true';
+let currentRunwayHeading = 100;  // Default RWY 10
+let currentWindDir = null;
+let currentWindSpeed = null;
+let currentWindGust = null;
 
 const socket = io();
 
 // =======================
-// ANIMATION UTILITIES
+// CLOCKS (UTC & WIB)
 // =======================
+function updateClocks() {
+    const utcEl = document.getElementById('utcClock');
+    const wibEl = document.getElementById('wibClock');
+    const now = new Date();
 
-function animateValue(element, oldValue, newValue, duration = 500) {
-    if (!element) return;
-    
-    const startTimestamp = performance.now();
-    const start = parseFloat(oldValue) || 0;
-    const end = parseFloat(newValue);
-    
-    const step = (timestamp) => {
-        const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-        const value = start + (end - start) * easeOutQuart(progress);
-        element.textContent = formatValue(value);
-        
-        if (progress < 1) {
-            window.requestAnimationFrame(step);
-        }
-    };
-    
-    window.requestAnimationFrame(step);
-}
+    if (utcEl) {
+        const h = now.getUTCHours().toString().padStart(2, '0');
+        const m = now.getUTCMinutes().toString().padStart(2, '0');
+        const s = now.getUTCSeconds().toString().padStart(2, '0');
+        utcEl.innerHTML = `${h}:${m}:${s} <small>UTC</small>`;
+    }
 
-function easeOutQuart(x) {
-    return 1 - Math.pow(1 - x, 4);
+    if (wibEl) {
+        // WIB is UTC+7
+        const wibOffset = 7 * 60 * 60 * 1000;
+        const wibDate = new Date(now.getTime() + wibOffset);
+        const h = wibDate.getUTCHours().toString().padStart(2, '0');
+        const m = wibDate.getUTCMinutes().toString().padStart(2, '0');
+        const s = wibDate.getUTCSeconds().toString().padStart(2, '0');
+        wibEl.innerHTML = `${h}:${m}:${s} <small>WIB</small>`;
+    }
 }
-
-function formatValue(val) {
-    if (Number.isInteger(val)) return val.toString();
-    return val.toFixed(1);
-}
-
-function addPulseAnimation(element) {
-    if (!element) return;
-    element.classList.add('pulse-animation');
-    setTimeout(() => element.classList.remove('pulse-animation'), 600);
-}
-
-function flashUpdate(element) {
-    if (!element) return;
-    element.classList.add('data-updated');
-    setTimeout(() => element.classList.remove('data-updated'), 600);
-}
+setInterval(updateClocks, 1000);
+updateClocks(); // Run immediately on load
 
 // =======================
-// COPY QAM TO CLIPBOARD
+// SIDEBAR TOGGLE
 // =======================
-function copyQamToClipboard() {
-    const qamElement = document.getElementById('qamDisplay');
-    const qamText = qamElement.innerText;
-    navigator.clipboard.writeText(qamText).then(function() {
-        const feedback = document.getElementById('copyFeedback');
-        if (feedback) {
-            feedback.classList.add('visible');
-            setTimeout(function() {
-                feedback.classList.remove('visible');
-            }, 2000);
-        }
-    }).catch(function(err) {
-        console.error('Gagal menyalin teks: ', err);
+function initSidebar() {
+    const toggle = document.getElementById('sidebarToggle');
+    const layout = document.getElementById('appLayout');
+    if (!toggle || !layout) return;
+
+    const saved = localStorage.getItem('sidebarCollapsed');
+    if (saved === 'true') layout.classList.add('sidebar-collapsed');
+
+    toggle.addEventListener('click', () => {
+        layout.classList.toggle('sidebar-collapsed');
+        localStorage.setItem('sidebarCollapsed', layout.classList.contains('sidebar-collapsed'));
     });
 }
 
-window.copyQamToClipboard = copyQamToClipboard;
+// =======================
+// TOAST NOTIFICATIONS
+// =======================
+function showToast(title, body, type = 'success', duration = 5000) {
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    const icon = type === 'danger' ? '🔴' : type === 'warning' ? '🟡' : '🟢';
+
+    toast.innerHTML = `
+        <span>${icon}</span>
+        <div>
+            <div class="toast-title">${title}</div>
+            <div class="toast-body">${body}</div>
+        </div>
+        <button class="toast-close" onclick="this.parentElement.remove()">✕</button>
+    `;
+
+    container.appendChild(toast);
+
+    // Play notify sound
+    if (type !== 'danger') playNotify();
+
+    // Auto dismiss
+    setTimeout(() => {
+        toast.classList.add('toast-exit');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+// =======================
+// METAR SYNTAX HIGHLIGHTING
+// =======================
+function highlightMetar(raw) {
+    if (!raw) return '';
+
+    const parts = raw.replace('=', '').split(/\s+/);
+    const highlighted = parts.map(part => {
+        // Station code (4 letter ICAO)
+        if (/^[A-Z]{4}$/.test(part) && parts.indexOf(part) === 0) {
+            return `<span class="metar-station">${part}</span>`;
+        }
+        // Time (ddhhmmZ)
+        if (/^\d{6}Z$/.test(part)) {
+            return `<span class="metar-time">${part}</span>`;
+        }
+        // Wind
+        if (/KT$/.test(part)) {
+            return `<span class="metar-wind">${part}</span>`;
+        }
+        // Weather phenomena
+        if (/^(\+|-|VC)?(TS|RA|SN|SH|FG|BR|HZ|DZ|GR|GS|SQ|FC|SA|DU|VA|FU|PO|SS|DS)/.test(part)) {
+            return `<span class="metar-weather">${part}</span>`;
+        }
+        // Clouds
+        if (/^(FEW|SCT|BKN|OVC|NSC|NCD|CLR|SKC)/.test(part)) {
+            return `<span class="metar-cloud">${part}</span>`;
+        }
+        // Temperature / Dewpoint
+        if (/^M?\d{2}\/M?\d{2}$/.test(part)) {
+            return `<span class="metar-temp">${part}</span>`;
+        }
+        // Pressure QNH
+        if (/^Q\d{4}$/.test(part)) {
+            return `<span class="metar-pressure">${part}</span>`;
+        }
+        // Trend
+        if (/^(NOSIG|TEMPO|BECMG)$/.test(part)) {
+            return `<span class="metar-trend">${part}</span>`;
+        }
+        return part;
+    });
+
+    return highlighted.join(' ');
+}
+
+// =======================
+// DECODED PARAMETERS PANEL
+// =======================
+function updateDecodedPanel(raw) {
+    if (!raw) return;
+
+    // Extract temperature/dewpoint
+    const tempMatch = raw.match(/\b(M?\d{2})\/(M?\d{2})\b/);
+    if (tempMatch) {
+        const temp = tempMatch[1].replace('M', '-');
+        const dew = tempMatch[2].replace('M', '-');
+        setParam('paramTemp', temp);
+        setParam('paramDewpoint', dew);
+    }
+
+    // Extract wind
+    const windMatch = raw.match(/\b(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?KT\b/);
+    if (windMatch) {
+        currentWindDir = windMatch[1] === 'VRB' ? 'VRB' : parseInt(windMatch[1]);
+        currentWindSpeed = parseInt(windMatch[2]);
+        currentWindGust = windMatch[4] ? parseInt(windMatch[4]) : null;
+
+        const windDisplay = currentWindDir === 'VRB' ? 'VRB' : `${currentWindDir}°`;
+        setParam('paramWind', `${windDisplay}/${currentWindSpeed}kt`);
+
+        const gustText = currentWindGust ? ` G${currentWindGust}kt` : '';
+        const detailEl = document.getElementById('paramWindDetail');
+        if (detailEl) detailEl.textContent = gustText;
+
+        updateCrosswind();
+    }
+
+    // Extract visibility
+    const visParts = raw.replace('=', '').split(/\s+/);
+    for (const p of visParts) {
+        if (/^\d{4}$/.test(p) && !p.endsWith('Z')) {
+            const vis = parseInt(p);
+            setParam('paramVis', vis >= 9999 ? '10+' : (vis >= 1000 ? (vis / 1000).toFixed(vis % 1000 === 0 ? 0 : 1) : vis));
+            const unitEl = document.getElementById('paramVisUnit');
+            if (unitEl) unitEl.textContent = vis >= 1000 ? 'km' : 'm';
+
+            // Update visibility bar
+            const bar = document.getElementById('visBar');
+            if (bar) {
+                const pct = Math.min(100, (vis / 10000) * 100);
+                bar.style.width = pct + '%';
+                bar.className = 'vis-bar-fill ' + (vis >= 5000 ? 'vis-good' : vis >= 3000 ? 'vis-moderate' : 'vis-poor');
+            }
+            break;
+        }
+    }
+
+    // Extract QNH
+    const qnhMatch = raw.match(/Q(\d{4})/);
+    if (qnhMatch) {
+        setParam('paramQNH', qnhMatch[1]);
+    }
+
+    // Extract Cloud
+    const cloudMatch = raw.match(/\b(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU)?\b/);
+    if (cloudMatch) {
+        const height = parseInt(cloudMatch[2]) * 100;
+        setParam('paramCloud', `${cloudMatch[1]} ${height}ft`);
+        const extraEl = document.getElementById('paramCloudExtra');
+        if (extraEl) extraEl.textContent = cloudMatch[3] ? cloudMatch[3] : '';
+    }
+
+    // Extract Weather
+    const weatherCodes = ['\\+TSRA', '-TSRA', 'TSRA', '\\+TS', '-TS', 'TS', 'VCTS', '\\+RA', '-RA', 'RA', 'SH', 'FG', 'BR', 'HZ', 'DZ', 'SN', 'GR', 'SQ', 'DS', 'SS', 'FC'];
+    let weatherFound = 'NIL';
+    const weatherMap = {
+        '+TSRA': '⛈️ Heavy Thunderstorm + Rain',
+        '-TSRA': '🌩️ Light Thunderstorm + Rain',
+        'TSRA': '⛈️ Thunderstorm + Rain',
+        '+TS': '⛈️ Heavy Thunderstorm',
+        '-TS': '🌩️ Light Thunderstorm',
+        'TS': '⛈️ Thunderstorm',
+        'VCTS': '🌩️ TS Vicinity',
+        '+RA': '🌧️ Heavy Rain',
+        '-RA': '🌦️ Light Rain',
+        'RA': '🌧️ Rain',
+        'SH': '🌦️ Showers',
+        'FG': '🌫️ Fog',
+        'BR': '🌫️ Mist',
+        'HZ': '🌤️ Haze',
+        'DZ': '🌧️ Drizzle',
+        'SN': '❄️ Snow',
+        'GR': '🧊 Hail',
+        'SQ': '💨 Squall',
+        'DS': '🌪️ Dust Storm',
+        'SS': '🌪️ Sand Storm',
+        'FC': '🌪️ Funnel Cloud'
+    };
+
+    for (const code of weatherCodes) {
+        const regex = new RegExp('\\b' + code + '\\b');
+        const cleanCode = code.replace(/\\/g, '');
+        if (regex.test(raw)) {
+            weatherFound = weatherMap[cleanCode] || cleanCode;
+            break;
+        }
+    }
+    setParam('paramWeather', weatherFound);
+
+    // Time
+    const timeMatch = raw.match(/(\d{2})(\d{2})(\d{2})Z/);
+    if (timeMatch) {
+        setParam('paramTime', `${timeMatch[2]}:${timeMatch[3]} UTC`);
+    }
+
+    // Update Thunderstorm module
+    updateThunderstormModule(raw);
+
+    // Check for Rain effect
+    checkRainStatus(raw);
+}
+
+// =======================
+// RAIN EFFECT
+// =======================
+function checkRainStatus(raw) {
+    // Precise regex with word boundaries to match specific weather codes
+    // Matches RA, DZ, SHRA, TSRA, etc. but NOT WARR or RERA
+    const rainRegex = /\b(\+|-|VC)?(RA|DZ|SHRA|TSRA|SH|SN|SG|GR|GS|PL|IC|UP)\b/;
+    const hasRain = rainRegex.test(raw);
+    
+    if (hasRain) {
+        document.body.classList.add('rain-active');
+        makeItRain();
+    } else {
+        document.body.classList.remove('rain-active');
+        stopRain();
+    }
+}
+
+function makeItRain() {
+    const frontRow = document.querySelector('.rain.front-row');
+    const backRow = document.querySelector('.rain.back-row');
+    
+    // If rain is already falling, don't recreate it
+    if (frontRow.children.length > 0) return;
+
+    let increment = 0;
+    let drops = "";
+    let backDrops = "";
+
+    // Higher density: increment is smaller on average
+    while (increment < 100) {
+        const randoHundo = Math.floor(Math.random() * 98) + 1;
+        const randoFiver = Math.floor(Math.random() * 3) + 1; // Faster increment for more drops
+        increment += randoFiver;
+
+        drops += `<div class="drop" style="left: ${increment}%; bottom: ${randoFiver + randoFiver - 1 + 100}%; animation-delay: 0.${randoHundo}s; animation-duration: 0.5${randoHundo}s;">
+                    <div class="stem" style="animation-delay: 0.${randoHundo}s; animation-duration: 0.5${randoHundo}s;"></div>
+                    <div class="splat" style="animation-delay: 0.${randoHundo}s; animation-duration: 0.5${randoHundo}s;"></div>
+                  </div>`;
+
+        backDrops += `<div class="drop" style="right: ${increment}%; bottom: ${randoFiver + randoFiver - 1 + 100}%; animation-delay: 0.${randoHundo}s; animation-duration: 0.5${randoHundo}s;">
+                        <div class="stem" style="animation-delay: 0.${randoHundo}s; animation-duration: 0.5${randoHundo}s;"></div>
+                        <div class="splat" style="animation-delay: 0.${randoHundo}s; animation-duration: 0.5${randoHundo}s;"></div>
+                      </div>`;
+    }
+
+    frontRow.innerHTML = drops;
+    backRow.innerHTML = backDrops;
+}
+
+function stopRain() {
+    const frontRow = document.querySelector('.rain.front-row');
+    const backRow = document.querySelector('.rain.back-row');
+    if (frontRow) frontRow.innerHTML = '';
+    if (backRow) backRow.innerHTML = '';
+}
+
+function setParam(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = value;
+    el.classList.add('data-flash');
+    setTimeout(() => el.classList.remove('data-flash'), 600);
+}
+
+// =======================
+// CROSSWIND CALCULATOR
+// =======================
+function selectRunway(btn, heading) {
+    document.querySelectorAll('.runway-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRunwayHeading = heading;
+    updateCrosswind();
+}
+
+function updateCrosswind() {
+    if (currentWindDir === null || currentWindDir === 'VRB' || currentWindSpeed === null) {
+        return;
+    }
+
+    const windDir = typeof currentWindDir === 'string' ? parseInt(currentWindDir) : currentWindDir;
+    const windSpeed = currentWindSpeed;
+    const rwyHdg = currentRunwayHeading;
+
+    const angleDeg = windDir - rwyHdg;
+    const angleRad = angleDeg * (Math.PI / 180);
+
+    const headwind = Math.round(windSpeed * Math.cos(angleRad) * 10) / 10;
+    const crosswind = Math.round(Math.abs(windSpeed * Math.sin(angleRad)) * 10) / 10;
+    const tailwind = headwind < 0 ? Math.abs(headwind) : 0;
+    const headVal = headwind > 0 ? headwind : 0;
+
+    // Update values
+    document.getElementById('xwHead').textContent = `${headVal.toFixed(1)} kt`;
+    document.getElementById('xwCross').textContent = `${crosswind.toFixed(1)} kt`;
+    document.getElementById('xwTail').textContent = `${tailwind.toFixed(1)} kt`;
+
+    // Update status colors
+    updateXwindStatus('xwHead', 'xwHeadStatus', headVal, 999, 'Favorable', 'Favorable', 'Favorable');
+    updateXwindStatus('xwCross', 'xwCrossStatus', crosswind, 20, 'Safe', 'Monitor', 'EXCEEDED');
+    updateXwindStatus('xwTail', 'xwTailStatus', tailwind, 10, 'Safe', 'Monitor', 'EXCEEDED');
+}
+
+function updateXwindStatus(parentId, statusId, value, limit, safeText, monitorText, criticalText) {
+    const parent = document.getElementById(parentId).parentElement;
+    const status = document.getElementById(statusId);
+    if (!parent || !status) return;
+
+    const pct = value / limit;
+    parent.className = 'xwind-item ' + (pct >= 0.8 ? 'xw-critical' : pct >= 0.5 ? 'xw-monitor' : 'xw-safe');
+    status.textContent = pct >= 0.8 ? criticalText : pct >= 0.5 ? monitorText : safeText;
+}
+
+// =======================
+// THUNDERSTORM MODULE
+// =======================
+function updateThunderstormModule(raw) {
+    const tsStatus = document.getElementById('tsStatus');
+    const tsCB = document.getElementById('tsCB');
+    const tsInMetar = document.getElementById('tsInMetar');
+    const tsLightning = document.getElementById('tsLightning');
+    const tsStatusText = document.getElementById('tsStatusText');
+    const tsRadar = document.getElementById('tsRadar');
+
+    if (!tsStatus) return;
+
+    const tsCodes = ['TS', 'TSRA', 'VCTS', '+TS', 'TSGR', '-TS', '+TSRA', '-TSRA'];
+    const hasTS = tsCodes.some(code => raw.includes(code));
+    const hasCB = /CB\b/.test(raw);
+
+    if (hasTS) {
+        tsStatus.className = 'ts-status active';
+        tsStatus.innerHTML = '<span class="lightning-icon">⚡</span> ACTIVE THUNDERSTORM DETECTED';
+
+        // Add lightning icon to radar
+        const existingIcon = tsRadar.querySelector('.ts-icon');
+        if (!existingIcon) {
+            const icon = document.createElement('span');
+            icon.className = 'ts-icon';
+            icon.textContent = '⚡';
+            icon.style.top = '25%';
+            icon.style.left = '60%';
+            tsRadar.appendChild(icon);
+        }
+    } else {
+        tsStatus.className = 'ts-status clear';
+        tsStatus.innerHTML = '<span>✅</span> No Thunderstorm Detected';
+
+        const existingIcon = tsRadar.querySelector('.ts-icon');
+        if (existingIcon) existingIcon.remove();
+    }
+
+    if (tsCB) tsCB.textContent = hasCB ? 'Yes' : 'No';
+    if (tsInMetar) tsInMetar.textContent = hasTS ? 'Yes' : 'No';
+    if (tsLightning) tsLightning.textContent = hasTS ? 'Possible' : '--';
+    if (tsStatusText) tsStatusText.textContent = hasTS ? 'ACTIVE' : 'Clear';
+
+    const tsLastUpdate = document.getElementById('tsLastUpdate');
+    if (tsLastUpdate) {
+        const now = new Date();
+        const utcStr = now.getUTCHours().toString().padStart(2, '0') + ':' +
+                       now.getUTCMinutes().toString().padStart(2, '0') + ' UTC';
+        tsLastUpdate.textContent = `Last Update: ${utcStr}`;
+    }
+}
 
 // =======================
 // SOCKET CONNECTION
 // =======================
-
-socket.on("connect", () => {
-    console.log("Connected to WebSocket");
-    const statusEl = document.getElementById("status-indicator");
-    if (statusEl) {
-        statusEl.innerHTML = "<span class='online-dot'></span> LIVE";
-        statusEl.style.animation = "none";
-        setTimeout(() => statusEl.style.animation = "", 10);
-    }
+socket.on('connect', () => {
+    console.log('WebSocket connected');
+    const dot = document.getElementById('connectionDot');
+    const text = document.getElementById('connectionText');
+    if (dot) dot.classList.add('online');
+    if (text) text.textContent = 'LIVE';
 });
 
-socket.on("disconnect", () => {
-    const statusEl = document.getElementById("status-indicator");
-    if (statusEl) {
-        statusEl.innerHTML = "<span class='offline-dot'></span> OFFLINE";
-    }
+socket.on('disconnect', () => {
+    const dot = document.getElementById('connectionDot');
+    const text = document.getElementById('connectionText');
+    if (dot) dot.classList.remove('online');
+    if (text) text.textContent = 'OFFLINE';
 });
 
 // =======================
 // METAR UPDATE HANDLER
 // =======================
+socket.on('metar_update', function (data) {
+    console.log('METAR update received:', data);
+    console.log('soundEnabled:', soundEnabled);
 
-socket.on("metar_update", function(data) {
-    console.log("New METAR received:", data);
+    const isDuplicate = data.raw && data.raw === lastMetarRaw;
+    const isFirstLoad = lastMetarRaw === null;
+    
+    // Update state
+    lastMetarRaw = data.raw;
+    if (data.metar_status) lastMetarStatus = data.metar_status;
+    if (data.visibility_m !== undefined) lastVisibility = data.visibility_m;
+    
+    // Check for TS in raw (robust check)
+    const tsCodes = ['TS', 'TSRA', 'VCTS', '+TS', 'TSGR'];
+    const hasTS = data.raw ? tsCodes.some(c => data.raw.includes(c)) : false;
+    lastHasTS = hasTS;
 
-    if (data.raw) {
-        const windMatch = data.raw.match(/(\d{3}|VRB)\d{2,3}(G\d{2,3})?KT/);
-        if (windMatch) {
-            updateWindChart(windMatch[0], true);
-        }
-    }
-
-    const newRaw = data.raw;
-
-    // Check if data is actually new
-    if (lastMetarRaw && lastMetarRaw === newRaw) {
-        return;
-    }
-
-    const isNewMetar = lastMetarRaw !== null;
-    lastMetarRaw = newRaw;
-
-    // === ANIMATE QAM UPDATE ===
-    if (data.qam) {
-        const qamEl = document.getElementById("qamDisplay");
-        if (qamEl) {
-            qamEl.style.opacity = '0.5';
-            qamEl.textContent = data.qam;
-            setTimeout(() => qamEl.style.opacity = '1', 200);
-        }
-    }
-
-    // === ANIMATE NARRATIVE UPDATE ===
-    if (data.narrative) {
-        const narrativeEl = document.getElementById("narrativeDisplay");
-        if (narrativeEl) {
-            narrativeEl.style.transform = 'translateX(-10px)';
-            narrativeEl.style.opacity = '0.5';
-            narrativeEl.textContent = data.narrative;
-            setTimeout(() => {
-                narrativeEl.style.transform = 'translateX(0)';
-                narrativeEl.style.opacity = '1';
-            }, 200);
-        }
-    }
-
-    // === UPDATE METAR DISPLAY WITH ANIMATION ===
-    if (data.raw) {
-        const metarDisplay = document.querySelector(".metar-display");
-        if (metarDisplay) {
-            flashUpdate(metarDisplay);
-            
-            if (isNewMetar) {
-                typeWriterEffect(metarDisplay, data.raw);
-            } else {
-                metarDisplay.textContent = data.raw;
-            }
-            
-            let statusClass = "";
-            
-            const thunderstormCodes = ["TS", "TSRA", "VCTS", "+TS", "TSGR"];
-            const hasThunderstorm = thunderstormCodes.some(code => data.raw.includes(code));
-            
-            const visMatch = data.raw.match(/\s(\d{4})\s/);
-            let vis = null;
-            if (visMatch) {
-                vis = parseInt(visMatch[1]);
-            }
-            
-            const warningWeather = ["RA", "FG", "HZ", "BR", "SH", "DS", "SS", "FC"];
-            const hasWarningWeather = warningWeather.some(code => data.raw.includes(code));
-            
-            if (hasThunderstorm || (vis && vis < 3000)) {
-                statusClass = "status-danger";
-            } else if (vis && vis >= 3000 && vis <= 5000) {
-                statusClass = "status-warning";
-            } else if (hasWarningWeather || data.raw.includes("+")) {
-                statusClass = "status-warning";
-            }
-            
-            metarDisplay.classList.remove("status-danger", "status-warning");
-            if (statusClass) {
-                metarDisplay.classList.add(statusClass);
-            }
-        }
-    }
-
-    // === UPDATE TIMESTAMP ===
-    const now = new Date();
-    const formatted = 
-        now.getDate().toString().padStart(2,'0') + "-" +
-        (now.getMonth()+1).toString().padStart(2,'0') + "-" +
-        now.getFullYear() + " " +
-        now.getHours().toString().padStart(2,'0') + ":" +
-        now.getMinutes().toString().padStart(2,'0') + ":" +
-        now.getSeconds().toString().padStart(2,'0');
-
-    const lastUpdateEl = document.getElementById("lastUpdate");
-    if (lastUpdateEl) {
-        lastUpdateEl.style.transform = 'scale(1.05)';
-        lastUpdateEl.innerText = "Last Update: " + formatted;
-        setTimeout(() => lastUpdateEl.style.transform = 'scale(1)', 300);
-    }
-
-    const lastSavedEl = document.getElementById("lastSaved");
-    if (lastSavedEl) {
-        lastSavedEl.innerText = formatted;
-    }
-
-    // === UPDATE CHARTS ===
-    updateCharts();
-
-    if (data.wind) {
-        updateWindChart(data.wind);
-    }
-
-    // === UPDATE HISTORY TABLE ===
-    updateHistoryTable();
-
-    // ===============================
-    // VISIBILITY CHECK & ALARM
-    // ===============================
-    const visMatch = newRaw.match(/\s(\d{4})\s/);
-    let vis = null;
-
-    if (visMatch) {
-        vis = parseInt(visMatch[1]);
-    }
-
-    if (vis && vis < 3000) {
-        document.body.classList.add('low-visibility');
-        playAlarm();
-        lowVisTriggered = true;
-    } else {
-        document.body.classList.remove('low-visibility');
+    // Always play notification sound when data event arrives (even duplicates)
+    if (!isFirstLoad && soundEnabled) {
+        console.log('Playing notify sound for new data');
         playNotify();
-        lowVisTriggered = false;
     }
+
+    // ALERTS & ALARMS - run even if duplicate to ensure user sees/hears severe weather
+    if (data.raw) {
+        // Visibility alarm (use direct data if available)
+        const vis = data.visibility_m !== undefined ? data.visibility_m : null;
+
+        if (vis !== null && vis < 3000) {
+            document.body.classList.add('low-visibility');
+            console.log('Low visibility detected:', vis, 'm');
+            playAlarm();
+            showToast('⚠️ LOW VISIBILITY', `Visibility reduced to ${vis}m`, 'danger', 10000);
+        } else {
+            document.body.classList.remove('low-visibility');
+        }
+
+        // Thunderstorm alarm
+        if (hasTS) {
+            console.log('Thunderstorm detected, playing alarm');
+            showToast('⚡ THUNDERSTORM', 'Thunderstorm detected in METAR', 'danger', 10000);
+            playAlarm();
+        }
+    }
+
+    // Skip UI intensive updates (charts, table) if data hasn't changed
+    if (isDuplicate) return;
+
+    // Show toast for new data
+    if (!isFirstLoad && data.raw) {
+        showToast('New METAR Received', `${STATION} — ${new Date().toUTCString().slice(17, 25)} UTC`);
+    }
+
+    // Update raw METAR display
+    if (data.raw) {
+        const rawEl = document.getElementById('metarRawCode');
+        if (rawEl) {
+            rawEl.innerHTML = highlightMetar(data.raw);
+        }
+
+        // Update status color
+        const panel = document.getElementById('metarRawPanel');
+        if (panel) {
+            panel.classList.remove('status-danger', 'status-warning');
+            const tsCodes = ['TS', 'TSRA', 'VCTS', '+TS', 'TSGR'];
+            const hasTS = tsCodes.some(c => data.raw.includes(c));
+            const visMatch = data.raw.match(/\s(\d{4})\s/);
+            const vis = visMatch ? parseInt(visMatch[1]) : null;
+
+            if (hasTS || (vis && vis < 3000)) {
+                panel.classList.add('status-danger');
+            } else if (vis && vis >= 3000 && vis <= 5000) {
+                panel.classList.add('status-warning');
+            }
+        }
+
+        // Update decoded panel
+        updateDecodedPanel(data.raw);
+    }
+
+    // Update QAM
+    if (data.qam) {
+        const qamEl = document.getElementById('qamDisplay');
+        if (qamEl) qamEl.textContent = data.qam;
+    }
+
+    // Update narrative
+    if (data.narrative) {
+        const narEl = document.getElementById('narrativeDisplay');
+        if (narEl) narEl.textContent = data.narrative;
+    }
+
+    // Update timestamp
+    const now = new Date();
+    const formatted = now.toLocaleDateString('id-ID') + ' ' +
+        now.getHours().toString().padStart(2, '0') + ':' +
+        now.getMinutes().toString().padStart(2, '0') + ':' +
+        now.getSeconds().toString().padStart(2, '0');
+
+    const lastSaved = document.getElementById('lastSaved');
+    if (lastSaved) lastSaved.textContent = formatted;
+
+    // Charts and history updates moved here (after duplicate check)
+    updateCharts();
+    updateHistoryTable();
 });
 
-// Typewriter effect function
-function typeWriterEffect(element, text, speed = 30) {
-    element.textContent = '';
-    let i = 0;
-    
-    function type() {
-        if (i < text.length) {
-            element.textContent += text.charAt(i);
-            i++;
-            setTimeout(type, speed);
-        }
-    }
-    
-    type();
+// =======================
+// ALERT BANNER
+// =======================
+function showAlert(title, message, level = 'critical') {
+    const banner = document.getElementById('alertBanner');
+    if (!banner) return;
+    banner.className = `alert-banner visible alert-${level}`;
+    document.getElementById('alertTitle').textContent = title;
+    document.getElementById('alertMessage').textContent = message;
+}
+
+function dismissAlert() {
+    const banner = document.getElementById('alertBanner');
+    if (banner) banner.classList.remove('visible');
 }
 
 // =======================
-// HISTORY TABLE UPDATE
+// COPY FUNCTIONS
 // =======================
+function copyMetar() {
+    const el = document.getElementById('metarRawCode');
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(() => {
+        const fb = document.getElementById('metarCopyFeedback');
+        if (fb) { fb.classList.add('visible'); setTimeout(() => fb.classList.remove('visible'), 2000); }
+    });
+}
 
-async function updateHistoryTable() {
-    try {
-        const response = await fetch("/api/history");
-        const result = await response.json();
+function copyQam() {
+    const el = document.getElementById('qamDisplay');
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(() => {
+        const fb = document.getElementById('qamCopyFeedback');
+        if (fb) { fb.classList.add('visible'); setTimeout(() => fb.classList.remove('visible'), 2000); }
+    });
+}
+
+window.copyMetar = copyMetar;
+window.copyQam = copyQam;
+
+// =======================
+// SOUND FUNCTIONS
+// =======================
+function enableSound() {
+    soundEnabled = !soundEnabled;
+    const btn = document.getElementById('soundToggle');
+
+    // Save state to localStorage
+    localStorage.setItem('soundEnabled', soundEnabled);
+
+    if (soundEnabled) {
+        // Unlock audio context on first enable (browser autoplay policy)
+        const a1 = document.getElementById('lowVisSound');
+        const a2 = document.getElementById('newDataSound');
         
-        const tableBody = document.getElementById("historyTableBody");
-        if (!tableBody) return;
-        
-        tableBody.style.opacity = '0.5';
-        
-        setTimeout(async () => {
-            tableBody.innerHTML = "";
-            
-            if (result.data && result.data.length > 0) {
-                result.data.forEach((item, index) => {
-                    const row = document.createElement("tr");
-                    row.style.animation = `fadeInUp 0.3s ease-out ${index * 0.05}s both`;
-                    
-                    const timeCell = document.createElement("td");
-                    timeCell.textContent = item.time;
-                    
-                    const stationCell = document.createElement("td");
-                    stationCell.textContent = item.station;
-                    
-                    const metarCell = document.createElement("td");
-                    metarCell.textContent = item.metar;
-                    
-                    row.appendChild(timeCell);
-                    row.appendChild(stationCell);
-                    row.appendChild(metarCell);
-                    
-                    tableBody.appendChild(row);
+        const unlockAudio = (audioElement) => {
+            if (!audioElement) return;
+            audioElement.currentTime = 0;
+            audioElement.play()
+                .then(() => {
+                    console.log('Audio unlocked successfully');
+                    audioElement.pause();
+                    audioElement.currentTime = 0;
+                })
+                .catch(error => {
+                    console.warn('Audio unlock failed:', error);
+                    audioElement.load();
                 });
-            } else {
-                tableBody.innerHTML = '<tr><td colspan="3" class="text-center">No data available</td></tr>';
-            }
-            
-            tableBody.style.opacity = '1';
-        }, 200);
-        
-    } catch (error) {
-        console.error("Error updating history table:", error);
+        };
+
+        if (a1) unlockAudio(a1);
+        if (a2) unlockAudio(a2);
+
+        if (btn) {
+            btn.textContent = '🔊 Sound ON';
+            btn.classList.add('active');
+        }
+        console.log('Sound ENABLED');
+
+        // Immediate check: If there's an active critical condition, play alarm now
+        if (lastVisibility !== null && lastVisibility < 3000 || lastHasTS || lastMetarStatus === 'danger') {
+            console.log('Immediate alert: critical condition detected on activation');
+            playAlarm();
+        }
+    } else {
+        if (btn) {
+            btn.textContent = '🔇 Sound OFF';
+            btn.classList.remove('active');
+        }
+        console.log('Sound DISABLED');
     }
 }
+window.enableSound = enableSound;
 
-// =======================
-// CHARTS CREATION
-// =======================
-
-function createCharts() {
-    // Destroy existing charts
-    if (tempChart instanceof Chart) {
-        tempChart.destroy();
-    }
-    if (pressureChart instanceof Chart) {
-        pressureChart.destroy();
-    }
-
-    const tempCanvas = document.getElementById('tempChart');
-    const pressureCanvas = document.getElementById('pressureChart');
-    
-    if (!tempCanvas || !pressureCanvas) {
-        console.log("Chart canvases not found");
+function playAlarm() {
+    if (!soundEnabled) {
+        console.log('Sound disabled, skipping alarm');
         return;
     }
-
-    const ctxTemp = tempCanvas.getContext('2d');
-    const ctxPressure = pressureCanvas.getContext('2d');
-
-    tempChart = new Chart(ctxTemp, {
-        type: "line",
-        data: { 
-            labels: [], 
-            datasets: [{ 
-                label: "Temperature (°C)", 
-                data: [],
-                borderColor: "rgba(239, 68, 68, 1)",
-                backgroundColor: "rgba(239, 68, 68, 0.15)",
-                borderWidth: 3,
-                tension: 0.4,
-                fill: true,
-                pointRadius: 4,
-                pointHoverRadius: 6,
-                pointBackgroundColor: "rgba(239, 68, 68, 1)"
-            }] 
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: {
-                duration: 800,
-                easing: 'easeOutQuart'
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        font: { weight: 'bold' }
-                    }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: false,
-                    grid: {
-                        color: 'rgba(14, 165, 233, 0.1)'
-                    }
-                },
-                x: {
-                    grid: {
-                        display: false
-                    }
-                }
-            }
-        }
-    });
-
-    pressureChart = new Chart(ctxPressure, {
-        type: "line",
-        data: { 
-            labels: [], 
-            datasets: [{ 
-                label: "Pressure (QNH)", 
-                data: [],
-                borderColor: "rgba(14, 165, 233, 1)",
-                backgroundColor: "rgba(14, 165, 233, 0.15)",
-                borderWidth: 3,
-                tension: 0.4,
-                fill: true,
-                pointRadius: 4,
-                pointHoverRadius: 6,
-                pointBackgroundColor: "rgba(14, 165, 233, 1)"
-            }] 
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: {
-                duration: 800,
-                easing: 'easeOutQuart'
-            },
-            plugins: {
-                legend: {
-                    labels: {
-                        font: { weight: 'bold' }
-                    }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: false,
-                    grid: {
-                        color: 'rgba(14, 165, 233, 0.1)'
-                    }
-                },
-                x: {
-                    grid: {
-                        display: false
-                    }
-                }
-            }
-        }
-    });
+    const a = document.getElementById('lowVisSound');
+    if (a) {
+        a.currentTime = 0;
+        a.play()
+            .then(() => console.log('Alarm played'))
+            .catch(error => {
+                console.error('Failed to play alarm:', error);
+                // Try to load and play again
+                a.load();
+                a.play().catch(e => console.error('Retry also failed:', e));
+            });
+    } else {
+        console.error('Alarm audio element not found');
+    }
 }
 
-// =======================
-// FETCH METAR DATA
-// =======================
-
-async function fetchMetar() {
-    try {
-        const response = await fetch(`/api/metar/${STATION}`);
-        const data = await response.json();
-
-        if (data.error) return;
-
-        const windEl = document.getElementById("wind");
-        const visEl = document.getElementById("visibility");
-        const weatherEl = document.getElementById("weather");
-        const cloudEl = document.getElementById("cloud");
-        const qnhEl = document.getElementById("qnh");
-
-        if (windEl) {
-            flashUpdate(windEl);
-
-            let windText = "--";
-
-            if (data.wind) {
-                windText = data.wind;
-            } else if (data.wind_direction && data.wind_speed) {
-                windText = data.wind_direction + "° " + data.wind_speed + " KT";
-
-                if (data.wind_gust) {
-                    windText += " G" + data.wind_gust;
-                }
-            }
-
-            windEl.textContent = windText;
-        }
-        if (visEl) {
-            flashUpdate(visEl);
-            visEl.textContent = data.visibility;
-        }
-        if (weatherEl) {
-            flashUpdate(weatherEl);
-            weatherEl.textContent = data.weather;
-        }
-        if (cloudEl) {
-            flashUpdate(cloudEl);
-            cloudEl.textContent = data.cloud;
-        }
-        if (qnhEl) {
-            flashUpdate(qnhEl);
-            qnhEl.textContent = data.qnh + " MB";
-        }
-
-        updateWeatherIcon(data.weather);
-        updateWindChart(data.wind, false);
-        updateWindRose(data.wind);
-
-    } catch (error) {
-        console.error("Error fetching METAR:", error);
+function playNotify() {
+    if (!soundEnabled) {
+        console.log('Sound disabled, skipping notify');
+        return;
+    }
+    const a = document.getElementById('newDataSound');
+    if (a) {
+        a.currentTime = 0;
+        a.play()
+            .then(() => console.log('Notify sound played'))
+            .catch(error => {
+                console.error('Failed to play notify sound:', error);
+                // Try loading the audio again
+                a.load();
+                a.play().catch(e => console.warn('Retry also failed:', e));
+            });
+    } else {
+        console.error('Notify audio element not found');
     }
 }
 
 // =======================
-// LOAD HISTORY FOR CHARTS
+// CHARTS (Light Theme)
 // =======================
+const chartColors = {
+    tempLine: '#DC2626',
+    tempFill: 'rgba(220, 38, 38, 0.08)',
+    pressureLine: '#2E5C8A',
+    pressureFill: 'rgba(46, 92, 138, 0.08)',
+    windLine: '#E8B339',
+    windFill: 'rgba(232, 179, 57, 0.1)',
+    gustLine: '#059669',
+    gustFill: 'rgba(5, 150, 105, 0.08)',
+    gridColor: 'rgba(0, 0, 0, 0.06)',
+    tickColor: '#64748B',
+    refLine: 'rgba(30, 58, 95, 0.3)'
+};
 
-async function loadHistory() {
-    try {
-        const response = await fetch("/api/metar/history");
-        const result = await response.json();
-        
-        if (!result.data || result.data.length === 0) {
-            console.log("No history data available");
-            return;
+function chartDefaults() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 800, easing: 'easeOutQuart' },
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+            legend: {
+                labels: {
+                    font: { family: 'Inter', weight: '600', size: 12 },
+                    color: '#475569',
+                    usePointStyle: true,
+                    padding: 16
+                }
+            },
+            tooltip: {
+                backgroundColor: '#1E3A5F',
+                titleFont: { family: 'Inter', size: 13, weight: '700' },
+                bodyFont: { family: 'JetBrains Mono', size: 12 },
+                padding: 12,
+                cornerRadius: 8,
+                borderColor: 'rgba(232,179,57,0.3)',
+                borderWidth: 1
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: false,
+                grid: { color: chartColors.gridColor, drawBorder: false },
+                ticks: { color: chartColors.tickColor, font: { family: 'Inter', weight: '600', size: 11 } }
+            },
+            x: {
+                grid: { display: false },
+                ticks: {
+                    color: chartColors.tickColor,
+                    font: { family: 'Inter', size: 10 },
+                    maxTicksLimit: 10,
+                    maxRotation: 45
+                }
+            }
         }
-
-        const labels = [];
-        const temps = [];
-        const pressures = [];
-        const winds = [];
-        const gusts = [];
-
-        result.data.forEach(row => {
-            labels.push(row.time);
-            temps.push(row.temp);
-            pressures.push(row.pressure);
-            winds.push(row.wind);
-            gusts.push(row.gust);
-        });
-
-        // Ensure charts exist
-        if (!tempChart || !pressureChart) {
-            createCharts();
-        }
-        if (!windChart) {
-            createWindChart();
-        }
-
-        // Populate Temperature Chart
-        tempChart.data.labels = labels;
-        tempChart.data.datasets[0].data = temps;
-
-        // Populate Pressure Chart
-        pressureChart.data.labels = labels;
-        pressureChart.data.datasets[0].data = pressures;
-
-        // Populate Wind Chart
-        windChart.data.labels = labels;
-        windChart.data.datasets[0].data = winds;
-        windChart.data.datasets[1].data = gusts;
-
-        // Update all charts
-        tempChart.update();
-        pressureChart.update();
-        windChart.update();
-        
-        console.log("History loaded successfully");
-    } catch (error) {
-        console.error("Error loading history:", error);
-    }
+    };
 }
 
-// =======================
-// WEATHER ICON
-// =======================
+function createCharts() {
+    const tempCanvas = document.getElementById('tempChart');
+    const pressureCanvas = document.getElementById('pressureChart');
+    if (!tempCanvas || !pressureCanvas) return;
 
-function updateWeatherIcon(weather) {
-    const iconEl = document.getElementById("weather-icon");
-    if (!iconEl) return;
-    
-    let icon = "☀️";
+    if (tempChart) tempChart.destroy();
+    if (pressureChart) pressureChart.destroy();
 
-    if (weather && weather.includes("TS")) icon = "⛈️";
-    else if (weather && weather.includes("RA")) icon = "🌧️";
-    else if (weather && weather.includes("FG")) icon = "🌫️";
-    else if (weather && weather.includes("HZ")) icon = "🌤️";
-    else if (weather && weather.includes("SN")) icon = "❄️";
-    else if (weather && weather.includes("DU")) icon = "🌪️";
-    else if (weather && weather.includes("SQ")) icon = "💨";
+    tempChart = new Chart(tempCanvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Temperature (°C)',
+                data: [],
+                borderColor: chartColors.tempLine,
+                backgroundColor: chartColors.tempFill,
+                borderWidth: 2.5,
+                tension: 0.4,
+                fill: true,
+                pointRadius: 3,
+                pointHoverRadius: 6,
+                pointBackgroundColor: chartColors.tempLine
+            }]
+        },
+        options: chartDefaults()
+    });
 
-    iconEl.style.transform = 'scale(0) rotate(-180deg)';
-    setTimeout(() => {
-        iconEl.textContent = icon;
-        iconEl.style.transform = 'scale(1) rotate(0deg)';
-    }, 150);
-    
-    iconEl.style.transition = 'transform 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55)';
+    pressureChart = new Chart(pressureCanvas.getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'QNH (hPa)',
+                data: [],
+                borderColor: chartColors.pressureLine,
+                backgroundColor: chartColors.pressureFill,
+                borderWidth: 2.5,
+                tension: 0.4,
+                fill: true,
+                pointRadius: 3,
+                pointHoverRadius: 6,
+                pointBackgroundColor: chartColors.pressureLine
+            }]
+        },
+        options: chartDefaults()
+    });
 }
 
-// =======================
-// WIND SPEED CHART
-// =======================
 function createWindChart() {
-    const windCanvas = document.getElementById('windChart');
-    if (!windCanvas) return;
-    
-    const ctx = windCanvas.getContext('2d');
+    const canvas = document.getElementById('windChart');
+    if (!canvas) return;
+    if (windChart) windChart.destroy();
 
-    windChart = new Chart(ctx, {
+    windChart = new Chart(canvas.getContext('2d'), {
         type: 'line',
         data: {
             labels: [],
@@ -586,94 +815,44 @@ function createWindChart() {
                 {
                     label: 'Wind Speed (KT)',
                     data: [],
-                    borderColor: '#FFD60A',
-                    backgroundColor: 'rgba(255,214,10,0.20)',
-                    borderWidth: 3,
+                    borderColor: chartColors.windLine,
+                    backgroundColor: chartColors.windFill,
+                    borderWidth: 2.5,
                     tension: 0.4,
                     fill: true,
-                    pointRadius: 4,
+                    pointRadius: 3,
                     pointHoverRadius: 6,
-                    pointBackgroundColor: '#FFD60A',    // titik kuning
-                    pointBorderColor: '#ffffff',
-                    pointBorderWidth: 2
+                    pointBackgroundColor: chartColors.windLine
                 },
                 {
                     label: 'Wind Gust (KT)',
                     data: [],
-                    borderColor: '#003a1c',
-                    backgroundColor: 'rgba(67, 215, 18, 0.1)',
-                    borderWidth: 3,
-                    borderDash: [5,5],
+                    borderColor: chartColors.gustLine,
+                    backgroundColor: chartColors.gustFill,
+                    borderWidth: 2,
+                    borderDash: [5, 5],
                     tension: 0.4,
                     fill: true,
-                    spanGaps: true, // ⭐ ini yang memperbaiki garis putus
-                    pointRadius: 4,
+                    spanGaps: true,
+                    pointRadius: 3,
                     pointHoverRadius: 5,
-                    pointBackgroundColor: '#003a1c',
-                    pointBorderColor: '#ffffff',
-                    pointBorderWidth: 2,
+                    pointBackgroundColor: chartColors.gustLine,
                     hidden: true
                 }
             ]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: {
-                mode: 'index',
-                intersect: false,
-            },
-            animation: {
-                duration: 800,
-                easing: 'easeOutQuart'
-            },
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    labels: {
-                        font: { weight: 'bold' },
-                        color: '#0c4a6e',
-                        usePointStyle: true,
-                        padding: 20
-                    }
-                },
-                tooltip: {
-                    backgroundColor: 'rgba(12, 74, 110, 0.9)',
-                    titleFont: { size: 14, weight: 'bold' },
-                    bodyFont: { size: 13 },
-                    padding: 12,
-                    cornerRadius: 8,
-                    callbacks: {
-                        label: function(context) {
-                            return context.dataset.label + ": " + context.raw + " kt";
-                        }
-                    }
-                }
-            },
+            ...chartDefaults(),
             scales: {
+                ...chartDefaults().scales,
                 y: {
+                    ...chartDefaults().scales.y,
                     beginAtZero: true,
-                    grid: {
-                        color: 'rgba(54, 162, 235, 0.1)'
-                    },
-                    ticks: {
-                        color: '#64748b',
-                        font: { weight: 'bold' }
-                    },
                     title: {
                         display: true,
                         text: 'Speed (KT)',
-                        color: '#0c4a6e',
-                        font: { weight: 'bold' }
-                    }
-                },
-                x: {
-                    grid: {
-                        display: false
-                    },
-                    ticks: {
-                        color: '#64748b',
-                        maxTicksLimit: 8
+                        color: '#475569',
+                        font: { family: 'Inter', weight: '700' }
                     }
                 }
             }
@@ -681,490 +860,278 @@ function createWindChart() {
     });
 }
 
-// Update wind chart from wind text
-function updateWindChart(windText, isRealtime = true) {
-    if (!isRealtime) return;
-    if (!windText || !windText.includes("KT")) return;
-    
-    let speed = 0;
-    let gust = null;
-    
-    const match = windText.match(/(\d{3}|VRB)(\d{2,3})(G(\d{2,3}))?KT/);
-    if (match) {
-        speed = parseInt(match[2]);
-        if (match[4]) {
-            gust = parseInt(match[4]);
-        }
-    }
-    
-    // Create chart if not exists
-    if (!windChart) {
-        createWindChart();
-    }
-    
-    const now = new Date();
-    const timeLabel = now.getHours().toString().padStart(2, '0') + ':' + 
-                      now.getMinutes().toString().padStart(2, '0');
-    
-    windChart.data.labels.push(timeLabel);
-    windChart.data.datasets[0].data.push(speed || 0);
-    windChart.data.datasets[1].data.push(gust || null);
-
-    if (windChart.data.labels.length > 15) {
-        windChart.data.labels.shift();
-        windChart.data.datasets[0].data.shift();
-        windChart.data.datasets[1].data.shift();
-    }
-
-    windChart.update();
-}
-
 // =======================
-// WIND ROSE - Using Chart.js PolarArea
+// FETCH & UPDATE CHARTS
 // =======================
-
-function updateWindRose(windText) {
-    if (!windText || !windText.includes("°")) return;
-    
-    const direction = parseInt(windText.split("°")[0]) || 0;
-
-    if (!windRose) {
-        const roseCanvas = document.getElementById('windRose');
-        if (!roseCanvas) return;
-        
-        const ctx = roseCanvas.getContext('2d');
-        windRose = new Chart(ctx, {
-            type: 'polarArea',
-            data: {
-                labels: ['N','NE','E','SE','S','SW','W','NW'],
-                datasets: [{
-                    data: [0,0,0,0,0,0,0,0],
-                    backgroundColor: [
-                        'rgba(239, 68, 68, 0.7)',
-                        'rgba(249, 115, 22, 0.7)',
-                        'rgba(234, 179, 8, 0.7)',
-                        'rgba(34, 197, 94, 0.7)',
-                        'rgba(6, 182, 212, 0.7)',
-                        'rgba(59, 130, 246, 0.7)',
-                        'rgba(139, 92, 246, 0.7)',
-                        'rgba(236, 72, 153, 0.7)'
-                    ],
-                    borderColor: [
-                        'rgba(239, 68, 68, 1)',
-                        'rgba(249, 115, 22, 1)',
-                        'rgba(234, 179, 8, 1)',
-                        'rgba(34, 197, 94, 1)',
-                        'rgba(6, 182, 212, 1)',
-                        'rgba(59, 130, 246, 1)',
-                        'rgba(139, 92, 246, 1)',
-                        'rgba(236, 72, 153, 1)'
-                    ],
-                    borderWidth: 2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: {
-                    duration: 800,
-                    easing: 'easeOutQuart'
-                },
-                plugins: {
-                    legend: {
-                        position: 'right',
-                        labels: {
-                            font: { weight: 'bold', size: 12 },
-                            color: '#0c4a6e',
-                            padding: 15
-                        }
-                    }
-                },
-                scales: {
-                    r: {
-                        grid: {
-                            color: 'rgba(14, 165, 233, 0.2)'
-                        },
-                        ticks: {
-                            color: '#64748b',
-                            backdropColor: 'transparent'
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    const index = Math.floor(direction / 45) % 8;
-    windRose.data.datasets[0].data[index] += 1;
-    windRose.update();
-}
-
-// =======================
-// FULLSCREEN TOGGLE
-// =======================
-
-function toggleFullscreen() {
-    if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen();
-        document.body.classList.add("atc-mode");
-    } else {
-        document.exitFullscreen();
-        document.body.classList.remove("atc-mode");
-    }
-}
-
-window.toggleFullscreen = toggleFullscreen;
-
-// =======================
-// UPDATE CHARTS FROM API
-// =======================
-
 function updateCharts() {
-    fetch("/api/latest")
-        .then(response => response.json())
+    fetch('/api/latest')
+        .then(r => r.json())
         .then(data => {
-            if (document.getElementById("status-indicator")) {
-                const statusEl = document.getElementById("status-indicator");
-                statusEl.innerHTML = "<span class='online-dot'></span> ONLINE";
-                statusEl.style.transform = 'scale(1.1)';
-                setTimeout(() => statusEl.style.transform = 'scale(1)', 200);
-            }
-
             if (tempChart) {
                 tempChart.data.labels = data.labels;
                 tempChart.data.datasets[0].data = data.temps;
                 tempChart.update('none');
             }
-
             if (pressureChart) {
                 pressureChart.data.labels = data.labels;
                 pressureChart.data.datasets[0].data = data.pressures;
                 pressureChart.update('none');
             }
-            
-            const alertBox = document.getElementById("alert-box");
-            
-            if (data.crosswind > 20) {
-                if (alertBox) {
-                    alertBox.innerHTML = "🚨 CROSSWIND CRITICAL";
-                    alertBox.classList.add("alert-danger");
-                    alertBox.style.display = 'block';
-                }
-            } else {
-                if (alertBox) {
-                    alertBox.style.display = 'none';
-                    alertBox.classList.remove("alert-danger");
-                }
-            }   
-
-            if (data.thunderstorm === true) {
-                const sound = document.getElementById("lowVisSound");
-                if (sound) sound.play();
-                if (alertBox) {
-                    alertBox.innerHTML = "🌩️ THUNDERSTORM DETECTED";
-                    alertBox.classList.add("alert-danger");
-                    alertBox.style.display = 'block';
-                }
-            }
-
-            const latestTimestamp = data.timestamp;
-            if (lastTimestamp && latestTimestamp !== lastTimestamp) {
-                const notifySound = document.getElementById("newDataSound");
-                if (notifySound) notifySound.play();
-            }
-            lastTimestamp = latestTimestamp;
         })
-        .catch(error => console.error("Update error:", error));
+        .catch(e => console.error('Chart update error:', e));
 }
 
-// =======================
-// SOUND FUNCTIONS
-// =======================
+async function loadHistory() {
+    try {
+        const res = await fetch('/api/metar/history');
+        const result = await res.json();
+        if (!result.data || result.data.length === 0) return;
 
-function enableSound() {
-    soundEnabled = true;
+        const labels = result.data.map(r => r.time);
+        const temps = result.data.map(r => r.temp);
+        const pressures = result.data.map(r => r.pressure);
+        const winds = result.data.map(r => r.wind);
+        const gusts = result.data.map(r => r.gust);
 
-    const audio1 = document.getElementById("lowVisSound");
-    const audio2 = document.getElementById("newDataSound");
+        if (!tempChart || !pressureChart) createCharts();
+        if (!windChart) createWindChart();
 
-    if (audio1) audio1.play().then(() => audio1.pause());
-    if (audio2) audio2.play().then(() => audio2.pause());
+        tempChart.data.labels = labels;
+        tempChart.data.datasets[0].data = temps;
+        pressureChart.data.labels = labels;
+        pressureChart.data.datasets[0].data = pressures;
+        windChart.data.labels = labels;
+        windChart.data.datasets[0].data = winds;
+        windChart.data.datasets[1].data = gusts;
 
-    const btn = document.querySelector('.btn-warning');
-    if (btn) {
-        btn.textContent = '🔊 Sound Enabled';
-        btn.style.background = 'linear-gradient(135deg, #22c55e, #4ade80) !important';
-    }
-    
-    console.log("Sound system armed.");
-}
-
-window.enableSound = enableSound;
-
-function playAlarm() {
-    if (!soundEnabled) return;
-
-    const alarmAudio = document.getElementById("lowVisSound");
-    if (alarmAudio) {
-        alarmAudio.currentTime = 0;
-        alarmAudio.play().catch(e => console.error(e));
-    }
-}
-
-function playNotify() {
-    if (!soundEnabled) return;
-
-    const notifyAudio = document.getElementById("newDataSound");
-    if (notifyAudio) {
-        notifyAudio.currentTime = 0;
-        notifyAudio.play().catch(e => console.error(e));
+        tempChart.update();
+        pressureChart.update();
+        windChart.update();
+    } catch (e) {
+        console.error('History load error:', e);
     }
 }
 
 // =======================
-// WIND COMPASS - Real-Time Wind Direction (Using Plotly)
+// FETCH METAR DATA
+// =======================
+async function fetchMetar() {
+    try {
+        const res = await fetch(`/api/metar/${STATION}`);
+        const data = await res.json();
+        if (data.error) return;
+
+        if (data.raw) {
+            updateDecodedPanel(data.raw);
+            const rawEl = document.getElementById('metarRawCode');
+            if (rawEl) rawEl.innerHTML = highlightMetar(data.raw);
+        }
+    } catch (e) {
+        console.error('METAR fetch error:', e);
+    }
+}
+
+// =======================
+// HISTORY TABLE UPDATE
+// =======================
+async function updateHistoryTable() {
+    try {
+        const res = await fetch('/api/history');
+        const result = await res.json();
+        const tbody = document.getElementById('historyTableBody');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+        if (result.data && result.data.length > 0) {
+            result.data.forEach((item, i) => {
+                const row = document.createElement('tr');
+                row.style.animation = `fadeIn 0.3s ease-out ${i * 0.03}s both`;
+                row.innerHTML = `
+                    <td>${item.time}</td>
+                    <td>${item.station}</td>
+                    <td class="metar-cell">${item.metar}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No data available</td></tr>';
+        }
+    } catch (e) {
+        console.error('History table error:', e);
+    }
+}
+
+// =======================
+// WIND COMPASS (Plotly)
 // =======================
 function loadWindCompass() {
     fetch(`/api/metar/${STATION}`)
-    .then(res => res.json())
-    .then(data => {
-        if (data.error || !data.wind_direction) {
-            console.log("No wind data available for compass");
-            return;
-        }
+        .then(r => r.json())
+        .then(data => {
+            if (data.error || !data.wind_direction) return;
 
-        let windDir = parseInt(data.wind_direction);
-        let windSpeed = data.wind_speed || 0;
+            let windDir = data.wind_direction === 'VRB' ? 0 : parseInt(data.wind_direction);
+            let windSpeed = data.wind_speed || 0;
 
-        if (data.wind_direction === "VRB") {
-            windDir = 0;
-        }
+            // Update global variables for crosswind calculator
+            currentWindDir = windDir;
+            currentWindSpeed = windSpeed;
 
-        let trace = {
-            type: "scatterpolar",
-            r: [0, 1],
-            theta: [0, windDir],
-            mode: "lines+markers",
-            line: {
-                color: "red",
-                width: 4
+            // Update crosswind calculator
+            updateCrosswind();
+
+            // Update compass display
+            updateWindCompassDisplay(windDir, windSpeed);
+        })
+        .catch(e => console.error('Wind compass error:', e));
+}
+
+function updateWindCompassDisplay(windDir, windSpeed) {
+    if (!windDir && windDir !== 0) return;
+    
+    const dir = windDir === 'VRB' ? 0 : windDir;
+    const speed = windSpeed || 0;
+
+    Plotly.newPlot('windCompassChart', [{
+        type: 'scatterpolar',
+        r: [0, 1],
+        theta: [0, dir],
+        mode: 'lines+markers',
+        line: { color: '#DC2626', width: 4 },
+        marker: { size: 10, color: '#DC2626' },
+        fill: 'toself',
+        fillcolor: 'rgba(220, 38, 38, 0.1)'
+    }], {
+        polar: {
+            bgcolor: 'rgba(0,0,0,0)',
+            angularaxis: {
+                direction: 'clockwise',
+                rotation: 90,
+                tickmode: 'array',
+                tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+                ticktext: ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
+                tickfont: { size: 13, color: '#1E3A5F', family: 'Inter' }
             },
-            marker: {
-                size: 10,
-                color: "red"
-            },
-            fill: "toself",
-            fillcolor: "rgba(239, 68, 68, 0.2)"
-        };
-
-        let layout = {
-            polar: {
-                bgcolor: 'rgba(0,0,0,0)',
-                angularaxis: {
-                    direction: "clockwise",
-                    rotation: 90,
-                    tickmode: "array",
-                    tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
-                    ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
-                    tickfont: { size: 14, color: '#0c4a6e', weight: 'bold' }
-                },
-                radialaxis: {
-                    visible: false
-                }
-            },
-            showlegend: false,
-            margin: { t: 30, b: 30, l: 30, r: 30 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            annotations: [{
-                text: `<b>${windDir}°</b><br>${windSpeed} kt`,
-                showarrow: false,
-                font: {
-                    size: 24,
-                    color: '#0c4a6e',
-                    weight: 'bold'
-                },
-                y: 0.5,
-                x: 0.5,
-                xref: 'paper',
-                yref: 'paper'
-            }]
-        };
-
-        Plotly.newPlot("windCompassChart", [trace], layout, {responsive: true});
-    })
-    .catch(error => {
-        console.error("Error loading Wind Compass:", error);
-    });
+            radialaxis: { visible: false }
+        },
+        showlegend: false,
+        margin: { t: 30, b: 30, l: 30, r: 30 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        annotations: [{
+            text: `<b>${dir}°</b><br>${speed} kt`,
+            showarrow: false,
+            font: { size: 20, color: '#1E3A5F', family: 'Inter' },
+            y: 0.5, x: 0.5, xref: 'paper', yref: 'paper'
+        }]
+    }, { responsive: true });
 }
 
 // =======================
-// WIND ROSE - Historical Wind Data (Using Plotly)
+// WIND ROSE (Plotly)
 // =======================
 function loadWindRose() {
     fetch(`/api/windrose/${STATION}`)
-    .then(res => res.json())
-    .then(data => {
-        if (!data || data.length === 0) {
-            console.log("No wind history data available");
-            return;
-        }
+        .then(r => r.json())
+        .then(data => {
+            if (!data || data.length === 0) return;
 
-        let directions = data.map(d => d.dir);
-        let speeds = data.map(d => d.speed);
-
-        let trace = {
-            type: "barpolar",
-            r: speeds,
-            theta: directions,
-            marker: {
-                color: speeds,
-                colorscale: "Viridis",
-                showscale: true,
-                colorbar: {
-                    title: "Speed (kt)",
-                    thickness: 15,
-                    len: 0.5
-                }
-            },
-            opacity: 0.85
-        };
-
-        let layout = {
-            polar: {
-                bgcolor: 'rgba(0,0,0,0)',
-                angularaxis: {
-                    direction: "clockwise",
-                    rotation: 90,
-                    tickmode: "array",
-                    tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
-                    ticktext: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
-                    tickfont: { size: 12, color: '#0c4a6e' }
+            Plotly.newPlot('windRoseChart', [{
+                type: 'barpolar',
+                r: data.map(d => d.speed),
+                theta: data.map(d => d.dir),
+                marker: {
+                    color: data.map(d => d.speed),
+                    colorscale: [[0, '#2E5C8A'], [0.5, '#E8B339'], [1, '#DC2626']],
+                    showscale: true,
+                    colorbar: { title: 'kt', thickness: 12, len: 0.5, tickfont: { family: 'Inter', size: 10 } }
                 },
-                radialaxis: {
-                    showgrid: false,
-                    ticks: '',
-                    showline: false,
-                    visible: false
-                }
-            },
-            showlegend: false,
-            margin: { t: 20, b: 40, l: 40, r: 40 },
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)'
-        };
-
-        Plotly.newPlot("windRoseChart", [trace], layout, {responsive: true});
-    })
-    .catch(error => {
-        console.error("Error loading Wind Rose:", error);
-    });
+                opacity: 0.85
+            }], {
+                polar: {
+                    bgcolor: 'rgba(0,0,0,0)',
+                    angularaxis: {
+                        direction: 'clockwise',
+                        rotation: 90,
+                        tickmode: 'array',
+                        tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
+                        ticktext: ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
+                        tickfont: { size: 12, color: '#1E3A5F', family: 'Inter' }
+                    },
+                    radialaxis: { visible: false }
+                },
+                showlegend: false,
+                margin: { t: 20, b: 30, l: 30, r: 30 },
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)'
+            }, { responsive: true });
+        })
+        .catch(e => console.error('Wind rose error:', e));
 }
 
-// Auto-refresh
 setInterval(loadWindCompass, 5000);
 setInterval(loadWindRose, 10000);
 
 // =======================
 // INITIALIZATION
 // =======================
+document.addEventListener('DOMContentLoaded', function () {
+    // Clocks
+    updateClocks();
 
-document.addEventListener("DOMContentLoaded", function() {
-    // Initial card animations
-    const cards = document.querySelectorAll('.card-custom');
-    cards.forEach((card, index) => {
-        card.style.opacity = '0';
-        card.style.transform = 'translateY(30px)';
-        setTimeout(() => {
-            card.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
-            card.style.opacity = '1';
-            card.style.transform = 'translateY(0)';
-        }, 100 + (index * 100));
+    // Sidebar
+    initSidebar();
+
+    // Update sound toggle button based on saved state
+    const soundToggleBtn = document.getElementById('soundToggle');
+    if (soundToggleBtn) {
+        if (soundEnabled) {
+            soundToggleBtn.textContent = '🔊 Sound ON';
+            soundToggleBtn.classList.add('active');
+        } else {
+            soundToggleBtn.textContent = '🔇 Sound OFF';
+            soundToggleBtn.classList.remove('active');
+        }
+    }
+
+    // Staggered card fade-in
+    document.querySelectorAll('.card, .metar-raw-panel').forEach((el, i) => {
+        el.style.animationDelay = `${0.05 + i * 0.06}s`;
     });
 
-    // Create all charts
+    // Create charts
     createCharts();
     createWindChart();
-    
-    // Update charts
     updateCharts();
     loadHistory();
-    loadWindRose();
     loadWindCompass();
+    loadWindRose();
 
+    // Initial METAR fetch & decode
     if (typeof STATION !== 'undefined' && STATION) {
-        fetchMetar();
+        fetch(`/api/metar/${STATION}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.raw) {
+                    lastMetarRaw = data.raw;
+                    lastVisibility = data.visibility_m;
+                    lastMetarStatus = data.status || 'normal';
+                    const tsCodes = ['TS', 'TSRA', 'VCTS', '+TS', 'TSGR'];
+                    lastHasTS = tsCodes.some(c => data.raw.includes(c));
+                    
+                    updateDecodedPanel(data.raw);
+                    const rawEl = document.getElementById('metarRawCode');
+                    if (rawEl) rawEl.innerHTML = highlightMetar(data.raw);
+                    
+                    // If sound is ALREADY enabled and condition is bad, try to play 
+                    // (though browser may block until interaction)
+                    if (soundEnabled && (lastVisibility < 3000 || lastHasTS)) {
+                         playAlarm();
+                    }
+                }
+            });
     }
 
-    // Auto refresh METAR every minute
+    // Auto refresh
     setInterval(fetchMetar, 60000);
-
-    // Table row animations
-    const tableRows = document.querySelectorAll('#historyTableBody tr');
-    tableRows.forEach((row, index) => {
-        row.style.opacity = '0';
-        row.style.animation = `fadeInUp 0.4s ease-out ${index * 0.05}s both`;
-    });
-
-    // Button click animations
-    const buttons = document.querySelectorAll('button, .nav-btn, .btn-secondary-custom');
-    buttons.forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            const ripple = document.createElement('span');
-            ripple.style.cssText = `
-                position: absolute;
-                background: rgba(255,255,255,0.5);
-                border-radius: 50%;
-                transform: scale(0);
-                animation: rippleEffect 0.6s linear;
-                pointer-events: none;
-            `;
-            this.style.position = 'relative';
-            this.style.overflow = 'hidden';
-            this.appendChild(ripple);
-            setTimeout(() => ripple.remove(), 600);
-        });
-    });
 });
-
-// Add CSS animations dynamically
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes rippleEffect {
-        to {
-            transform: scale(4);
-            opacity: 0;
-        }
-    }
-    
-    @keyframes fadeInUp {
-        from {
-            opacity: 0;
-            transform: translateY(20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    }
-    
-    .pulse-animation {
-        animation: pulse 0.6s ease-in-out;
-    }
-    
-    @keyframes pulse {
-        0%, 100% { transform: scale(1); }
-        50% { transform: scale(1.05); }
-    }
-    
-    .data-updated {
-        animation: dataFlash 0.6s ease-out;
-    }
-    
-    @keyframes dataFlash {
-        0% { transform: scale(1.02); background: rgba(14, 165, 233, 0.2); }
-        100% { transform: scale(1); background: transparent; }
-    }
-`;
-document.head.appendChild(style);
-
