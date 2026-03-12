@@ -118,7 +118,10 @@ function updateChartColors() {
         }
     });
 
-    // Update Wind Rose if Plotly is used
+    // Update Wind widgets if Plotly is used
+    if (typeof loadWindCompass === 'function') {
+         loadWindCompass();
+    }
     if (typeof loadWindRose === 'function') {
          loadWindRose();
     }
@@ -1186,16 +1189,20 @@ function updateWindCompassDisplay(windDir, windSpeed) {
     
     const dir = windDir === 'VRB' ? 0 : windDir;
     const speed = windSpeed || 0;
+    const isDark = currentTheme === 'dark';
+    const accentColor = isDark ? '#F59E0B' : '#DC2626'; // Amber in dark mode, Red in light
+    const textColor = isDark ? '#F1F5F9' : '#1E3A5F';
+    const gridColor = isDark ? 'rgba(255, 255, 255, 0.4)' : '#1E3A5F';
 
     Plotly.newPlot('windCompassChart', [{
         type: 'scatterpolar',
         r: [0, 1],
         theta: [0, dir],
         mode: 'lines+markers',
-        line: { color: '#DC2626', width: 4 },
-        marker: { size: 10, color: '#DC2626' },
+        line: { color: accentColor, width: 4 },
+        marker: { size: 10, color: accentColor },
         fill: 'toself',
-        fillcolor: 'rgba(220, 38, 38, 0.1)'
+        fillcolor: isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(220, 38, 38, 0.1)'
     }], {
         polar: {
             bgcolor: 'rgba(0,0,0,0)',
@@ -1205,7 +1212,8 @@ function updateWindCompassDisplay(windDir, windSpeed) {
                 tickmode: 'array',
                 tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
                 ticktext: ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
-                tickfont: { size: 13, color: '#1E3A5F', family: 'Inter' }
+                tickfont: { size: 13, color: gridColor, family: 'Inter', weight: isDark ? 'bold' : 'normal' },
+                gridcolor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
             },
             radialaxis: { visible: false }
         },
@@ -1216,7 +1224,7 @@ function updateWindCompassDisplay(windDir, windSpeed) {
         annotations: [{
             text: `<b>${dir}°</b><br>${speed} kt`,
             showarrow: false,
-            font: { size: 20, color: '#1E3A5F', family: 'Inter' },
+            font: { size: 20, color: textColor, family: 'Inter' },
             y: 0.5, x: 0.5, xref: 'paper', yref: 'paper'
         }]
     }, { responsive: true });
@@ -1231,15 +1239,26 @@ function loadWindRose() {
         .then(data => {
             if (!data || data.length === 0) return;
 
+            const isDark = currentTheme === 'dark';
+            const gridColor = isDark ? 'rgba(255, 255, 255, 0.4)' : '#1E3A5F';
+
             Plotly.newPlot('windRoseChart', [{
                 type: 'barpolar',
                 r: data.map(d => d.speed),
                 theta: data.map(d => d.dir),
                 marker: {
                     color: data.map(d => d.speed),
-                    colorscale: [[0, '#2E5C8A'], [0.5, '#E8B339'], [1, '#DC2626']],
+                    colorscale: isDark 
+                        ? [[0, '#4ade80'], [0.5, '#facc15'], [1, '#f87171']] // Brighter colors for dark mode
+                        : [[0, '#2E5C8A'], [0.5, '#E8B339'], [1, '#DC2626']],
                     showscale: true,
-                    colorbar: { title: 'kt', thickness: 12, len: 0.5, tickfont: { family: 'Inter', size: 10 } }
+                    colorbar: { 
+                        title: 'kt', 
+                        thickness: 12, 
+                        len: 0.5, 
+                        tickfont: { family: 'Inter', size: 10, color: isDark ? '#F1F5F9' : '#475569' },
+                        titlefont: { color: isDark ? '#F1F5F9' : '#475569' }
+                    }
                 },
                 opacity: 0.85
             }], {
@@ -1251,9 +1270,14 @@ function loadWindRose() {
                         tickmode: 'array',
                         tickvals: [0, 45, 90, 135, 180, 225, 270, 315],
                         ticktext: ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'],
-                        tickfont: { size: 12, color: '#1E3A5F', family: 'Inter' }
+                        tickfont: { size: 12, color: gridColor, family: 'Inter', weight: isDark ? 'bold' : 'normal' },
+                        gridcolor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
                     },
-                    radialaxis: { visible: false }
+                    radialaxis: { 
+                        visible: true,
+                        gridcolor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                        tickfont: { color: isDark ? '#94A3B8' : '#64748B' }
+                    }
                 },
                 showlegend: false,
                 margin: { t: 20, b: 30, l: 30, r: 30 },

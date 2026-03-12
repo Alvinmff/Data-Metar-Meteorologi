@@ -654,9 +654,17 @@ a:hover {
   animation: dangerPulseBorder 2s ease-in-out infinite;
 }
 
+[data-theme="dark"] .metar-raw-panel.status-danger {
+  background: linear-gradient(135deg, #450a0a, #1a0606);
+}
+
 .metar-raw-panel.status-warning {
   border-left-color: var(--bmkg-warning);
   background: linear-gradient(135deg, #FFFBEB, #FFF);
+}
+
+[data-theme="dark"] .metar-raw-panel.status-warning {
+  background: linear-gradient(135deg, #422006, #1a0e05);
 }
 
 @keyframes dangerPulseBorder {
@@ -1431,6 +1439,10 @@ a:hover {
 
 body.low-visibility {
   background: #FEF2F2 !important;
+}
+
+[data-theme="dark"] body.low-visibility {
+  background: #450a0a !important;
 }
 
 body.low-visibility .card,
