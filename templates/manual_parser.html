@@ -31,6 +31,7 @@
             <div class="header-right">
                 <div class="wib-clock" id="wibClock">--:--:-- <small>WIB</small></div>
                 <div class="utc-clock" id="utcClock">--:--:-- <small>UTC</small></div>
+                <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle Dark/Light Mode">🌙</button>
                 <button class="sound-toggle" id="soundToggle" onclick="enableSound()">🔇 Sound</button>
                 <div class="connection-status" id="connectionStatus">
                     <span class="connection-dot" id="connectionDot"></span>
@@ -96,12 +97,7 @@
                 </form>
 
                 {% if validation_results %}
-                <div style="margin-top: var(--space-xl); padding: 15px; border-radius: var(--radius-md); 
-                            {% if validation_results[0].startswith('✅') %}
-                            background: #ECFDF5; border: 1px solid #A7F3D0; color: #065F46;
-                            {% else %}
-                            background: #FEF2F2; border: 1px solid #FECACA; color: #991B1B;
-                            {% endif %}">
+                <div class="validation-card {% if validation_results[0].startswith('✅') %}validation-success{% else %}validation-error{% endif %}">
                     <h4 style="margin-bottom: 10px; font-size: 0.95rem;">📋 Validation Results:</h4>
                     <ul style="list-style: none; padding: 0; margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">
                         {% for res in validation_results %}
@@ -110,6 +106,7 @@
                     </ul>
                 </div>
                 {% endif %}
+
 
                 {% if parsed_qam %}
                 <hr style="margin:var(--space-xl) 0;border-color:var(--border-color);">

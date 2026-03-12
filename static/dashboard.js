@@ -14,6 +14,8 @@ let lastVisibility = null;
 let lastHasTS = false;
 // Load soundEnabled from localStorage, default false
 let soundEnabled = localStorage.getItem('soundEnabled') === 'true';
+// Load theme from localStorage, default 'light'
+let currentTheme = localStorage.getItem('theme') || 'light';
 let currentRunwayHeading = 100;  // Default RWY 10
 let currentWindDir = null;
 let currentWindSpeed = null;
@@ -65,6 +67,63 @@ function initSidebar() {
         localStorage.setItem('sidebarCollapsed', layout.classList.contains('sidebar-collapsed'));
     });
 }
+
+// =======================
+// THEME MANAGEMENT (Dark/Light)
+// =======================
+function applyTheme(theme) {
+    const html = document.documentElement;
+    const btn = document.getElementById('themeToggle');
+    
+    html.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    
+    if (btn) {
+        btn.textContent = theme === 'light' ? '🌙' : '☀️';
+    }
+
+    // Update charts if they exist
+    updateChartColors();
+}
+
+function toggleTheme() {
+    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+    applyTheme(currentTheme);
+}
+
+function updateChartColors() {
+    const isDark = currentTheme === 'dark';
+    const gridColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)';
+    const tickColor = isDark ? '#94A3B8' : '#64748B';
+
+    [tempChart, pressureChart, windChart].forEach(chart => {
+        if (chart) {
+            if (chart.options && chart.options.scales) {
+                if (chart.options.scales.x) {
+                    chart.options.scales.x.grid.color = gridColor;
+                    chart.options.scales.x.ticks.color = tickColor;
+                }
+                if (chart.options.scales.y) {
+                    chart.options.scales.y.grid.color = gridColor;
+                    chart.options.scales.y.ticks.color = tickColor;
+                }
+            }
+            
+            // Adjust legend color
+            if (chart.options.plugins && chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+                chart.options.plugins.legend.labels.color = isDark ? '#F1F5F9' : '#475569';
+            }
+            
+            chart.update();
+        }
+    });
+
+    // Update Wind Rose if Plotly is used
+    if (typeof loadWindRose === 'function') {
+         loadWindRose();
+    }
+}
+window.toggleTheme = toggleTheme;
 
 // =======================
 // TOAST NOTIFICATIONS
@@ -163,12 +222,10 @@ async function runMetarValidation(raw) {
         const results = data.results || [];
 
         const isValid = results.length === 1 && results[0].startsWith('✅');
-        const bgColor = isValid ? '#ECFDF5' : '#FEF2F2';
-        const borderColor = isValid ? '#A7F3D0' : '#FECACA';
-        const textColor = isValid ? '#065F46' : '#991B1B';
+        const validationClass = isValid ? 'validation-success' : 'validation-error';
 
         let html = `
-            <div style="margin-top: 12px; padding: 12px; border-radius: 8px; background: ${bgColor}; border: 1px solid ${borderColor}; color: ${textColor};">
+            <div class="validation-card ${validationClass}">
                 <div style="font-weight: 700; font-size: 0.9rem; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
                     <span>📋</span> Validation Results:
                 </div>
@@ -752,10 +809,19 @@ const chartColors = {
     windFill: 'rgba(232, 179, 57, 0.1)',
     gustLine: '#059669',
     gustFill: 'rgba(5, 150, 105, 0.08)',
-    gridColor: 'rgba(0, 0, 0, 0.06)',
     tickColor: '#64748B',
-    refLine: 'rgba(30, 58, 95, 0.3)'
+    refLine: 'rgba(30, 58, 95, 0.3)',
+    legendColor: '#475569'
 };
+
+function getDynamicChartColors() {
+    const isDark = currentTheme === 'dark';
+    return {
+        grid: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
+        ticks: isDark ? '#94A3B8' : '#64748B',
+        legend: isDark ? '#F1F5F9' : '#475569'
+    };
+}
 
 function chartDefaults() {
     return {
@@ -767,7 +833,7 @@ function chartDefaults() {
             legend: {
                 labels: {
                     font: { family: 'Inter', weight: '600', size: 12 },
-                    color: '#475569',
+                    color: getDynamicChartColors().legend,
                     usePointStyle: true,
                     padding: 16
                 }
@@ -785,13 +851,13 @@ function chartDefaults() {
         scales: {
             y: {
                 beginAtZero: false,
-                grid: { color: chartColors.gridColor, drawBorder: false },
-                ticks: { color: chartColors.tickColor, font: { family: 'Inter', weight: '600', size: 11 } }
+                grid: { color: getDynamicChartColors().grid, drawBorder: false },
+                ticks: { color: getDynamicChartColors().ticks, font: { family: 'Inter', weight: '600', size: 11 } }
             },
             x: {
                 grid: { display: false },
                 ticks: {
-                    color: chartColors.tickColor,
+                    color: getDynamicChartColors().ticks,
                     font: { family: 'Inter', size: 10 },
                     maxTicksLimit: 10,
                     maxRotation: 45
@@ -1210,6 +1276,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // Sidebar
     initSidebar();
+
+    // Theme (Apply saved preference)
+    applyTheme(currentTheme);
 
     // Update sound toggle button based on saved state
     const soundToggleBtn = document.getElementById('soundToggle');
