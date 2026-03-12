@@ -43,10 +43,12 @@
 
         <!-- SIDEBAR -->
         <aside class="app-sidebar" id="appSidebar">
-            <!-- Airplane Decoration -->
+            <!-- Airplane & Tower Decoration -->
             <div class="airplane-decor-container fade-in" style="animation-delay:0.08s">
                 <img src="{{ url_for('static', filename='images/pesawat.png') }}" alt="Airplane Decor"
                     class="dashboard-airplane-img">
+                <img src="{{ url_for('static', filename='images/tower.png') }}" alt="Tower Decor"
+                    class="dashboard-tower-img">
             </div>
             <nav class="sidebar-nav">
                 <a href="/" class="sidebar-link" id="nav-dashboard">
@@ -189,13 +191,13 @@
     <!-- Charts Script -->
     {% if labels and labels|length > 0 %}
     <script>
-        const labels = {{ labels | tojson }};
-        const temps = {{ temps | tojson }};
-        const pressures = {{ pressures | tojson }};
-        const winds = {{ winds | tojson }};
-        const gusts = {{ gusts | tojson }};
-        const thunder_flags = {{ thunder_flags | tojson }};
-        const wind_dirs = {{ wind_dirs | tojson }};
+        const labels = JSON.parse('{{ labels | tojson | safe }}');
+        const temps = JSON.parse('{{ temps | tojson | safe }}');
+        const pressures = JSON.parse('{{ pressures | tojson | safe }}');
+        const winds = JSON.parse('{{ winds | tojson | safe }}');
+        const gusts = JSON.parse('{{ gusts | tojson | safe }}');
+        const thunder_flags = JSON.parse('{{ thunder_flags | tojson | safe }}');
+        const wind_dirs = JSON.parse('{{ wind_dirs | tojson | safe }}');
 
         const gridColor = 'rgba(0,0,0,0.06)';
         const tickColor = '#64748B';

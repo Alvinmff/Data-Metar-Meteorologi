@@ -1753,19 +1753,18 @@ body.rain-active::after {
 .airplane-decor-container {
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-end; /* Align to bottom for "grounded" look */
+  gap: var(--space-sm);
   padding: var(--space-md);
   width: 100%;
   overflow: hidden;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  /* Subtle separator if in sidebar */
   margin-bottom: var(--space-md);
 }
 
 .dashboard-airplane-img {
-  width: 100%;
-  max-width: 180px;
-  /* Slightly larger as requested (Sidebar is 240px) */
+  flex: 1;
+  max-width: 130px; /* Reduced to fit side-by-side */
   height: auto;
   object-fit: contain;
   transition: var(--transition-md);
@@ -1773,6 +1772,17 @@ body.rain-active::after {
   user-select: none;
   pointer-events: none;
   opacity: 0.9;
+  transform: translateY(-10px); /* Flying slightly above tower base */
+}
+
+.dashboard-tower-img {
+  width: 50px;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.2));
+  user-select: none;
+  pointer-events: none;
+  opacity: 0.85;
 }
 
 /* Hide or shrink when sidebar is collapsed */
@@ -1781,10 +1791,17 @@ body.rain-active::after {
 }
 
 .sidebar-collapsed .dashboard-airplane-img {
-  max-width: 70px;
+  max-width: 40px;
+  transform: none;
+  opacity: 0.5;
 }
 
-.dashboard-airplane-img:hover {
+.sidebar-collapsed .dashboard-tower-img {
+  display: none; /* Hide tower in tiny sidebar */
+}
+
+.dashboard-airplane-img:hover,
+.dashboard-tower-img:hover {
   transform: scale(1.05) translateY(-2px);
   opacity: 1;
 }
