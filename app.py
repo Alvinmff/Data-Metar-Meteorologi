@@ -1,14 +1,14 @@
-from flask import Flask, render_template, request, send_file
-import requests
-import pandas as pd
+from flask import Flask, render_template, request, send_file  # pyre-ignore
+import requests  # pyre-ignore
+import pandas as pd  # pyre-ignore
 import os
 import re
 import io   
-from flask import jsonify
+from flask import jsonify  # pyre-ignore
 from datetime import datetime
 from datetime import timedelta
 from io import BytesIO
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO  # pyre-ignore
 import time
 import threading
 from collections import deque
@@ -103,7 +103,8 @@ def calculate_crosswind(wind_dir, wind_speed, runway_heading):
 
 
 #Deteksi thunderstorm dari raw METAR
-def detect_thunderstorm(raw_metar):
+def detect_thunderstorm(raw_metar: str) -> bool:
+    if not raw_metar: return False
     ts_codes = ["TS", "TSRA", "VCTS", "+TS", "TSGR", "-TS", "TSRA", "+TSRA", "-TSRA"]
     return any(code in raw_metar for code in ts_codes)
 
@@ -179,11 +180,35 @@ WEATHER_CODES = [
 ]
 
 # =========================
+# DETECT METAR SPECIAL REPORT TYPE
+# =========================
+def detect_metar_report_type(metar: str) -> str:
+    """
+    Detect if METAR is a special report (COR, CCA, AMD, SPECI)
+    Returns: 'COR', 'AMD', 'SPECI', or 'METAR'
+    """
+    if not metar:
+        return "METAR"
+    
+    metar = metar.upper()
+
+    if " SPECI " in metar or metar.startswith("SPECI "):
+        return "SPECI"
+
+    if " AMD " in metar or metar.startswith("METAR AMD"):
+        return "AMD"
+
+    if " COR " in metar or metar.startswith("METAR COR") or " CCA " in metar or "CCA" in metar:
+        return "COR"
+
+    return "METAR"
+
+# =========================
 # PARSE METAR
 # =========================
-def parse_metar(metar):
+def parse_metar(metar: str) -> dict:
 
-    data = {
+    data: dict = {
         "station": None,
         "day": None,
         "hour": None,
@@ -198,8 +223,12 @@ def parse_metar(metar):
         "dewpoint_c": None,
         "pressure_hpa": None,
         "trend": None,
-        "tempo": None  # Add tempo field
+        "tempo": None,  # Add tempo field
+        "report_type": "METAR"   # 🔥 NEW: Tracks COR, AMD, SPECI, METAR
     }
+
+    # Detect special report type
+    data["report_type"] = detect_metar_report_type(metar)
 
     clean_metar = metar.replace("=", "")
     parts = clean_metar.split()
@@ -217,7 +246,7 @@ def parse_metar(metar):
         main_metar = metar
     
     # Parse the main METAR (without TEMPO) for weather and other fields
-    parts = main_metar.replace("=", "").split()
+    parts: list[str] = main_metar.replace("=", "").split()
 
     for part in parts:
 
@@ -225,9 +254,9 @@ def parse_metar(metar):
             data["station"] = part
 
         if part.endswith("Z") and len(part) == 7:
-            data["day"] = part[0:2]
-            data["hour"] = part[2:4]
-            data["minute"] = part[4:6]
+            data["day"] = part[0] + part[1]
+            data["hour"] = part[2] + part[3]
+            data["minute"] = part[4] + part[5]
 
         # WIND PARSER (robust aviation parser)
         if part.endswith("KT"):
@@ -279,7 +308,7 @@ def parse_metar(metar):
     # Check for danger conditions
     if detect_thunderstorm(metar):
         status = "danger"  # red - thunderstorm
-    elif data["visibility_m"] and data["visibility_m"] < 3000:
+    elif data["visibility_m"] is not None and data["visibility_m"] < 3000:
         status = "danger"  # red - low visibility < 3000m
     elif data["weather"] and data["weather"] != "NIL":
         # Check for warning conditions
@@ -290,7 +319,7 @@ def parse_metar(metar):
             status = "danger"  # red - severe weather
     
     # Check visibility for warning (3-5km)
-    if data["visibility_m"] and status != "danger":
+    if data["visibility_m"] is not None and status != "danger":
         vis_val = data["visibility_m"]
         if 3000 <= vis_val <= 5000:
             status = "warning"  # yellow - moderate visibility
@@ -444,7 +473,7 @@ def generate_metar_narrative(parsed, raw_metar=None):
     # Use format_parsed_for_display to convert new structure to display format
     display = format_parsed_for_display(parsed)
     
-    text = []
+    text: list[str] = []
     
     # Get station info
     station = display.get('station', 'Unknown')
@@ -571,17 +600,17 @@ def generate_metar_narrative(parsed, raw_metar=None):
         text.append(f"Tekanan udara {qnh} hPa.")
     
     # Trend
-    trend = display.get('trend', '')
+    trend: str = str(display.get('trend', ''))
     if trend and trend != 'NIL':
         if trend == 'NOSIG':
             text.append("Tidak ada perubahan signifikan dalam waktu dekat.")
         elif trend.startswith('TEMPO'):
-            tempo_content = trend[6:].strip()
+            tempo_content = trend.replace('TEMPO ', '', 1).strip()
             time_match = re.search(r'L(\d{4})', tempo_content)
             time_str = ""
             if time_match:
                 time_val = time_match.group(1)
-                time_str = f"pukul {time_val[:2]}:{time_val[2:]}"
+                time_str = f"pukul {time_val[:2]}:{time_val[2:]}"  # type: ignore
             vis_match = re.search(r'(\d{4})', tempo_content)
             vis_str = ""
             if vis_match:
@@ -620,16 +649,16 @@ def generate_metar_narrative(parsed, raw_metar=None):
 
             weather_found = None
             for code, desc in weather_map.items():
-                if code in tempo_content:
+                if tempo_content.find(code) != -1:
                     weather_found = desc
                     break
-            tempo_parts = []
+            tempo_parts: list[str] = []
             if time_str:
                 tempo_parts.append(time_str)
             if vis_str:
                 tempo_parts.append(f"visibilitas {vis_str}")
             if weather_found:
-                tempo_parts.append(weather_found)
+                tempo_parts.append(str(weather_found))
             if tempo_parts:
                 text.append(f"Dalam waktu dekat, diperkirakan akan terjadi {', '.join(tempo_parts)}.")
             else:
@@ -667,7 +696,7 @@ def extract_pressure(metar):
         if 'Q' in metar:
             try:
                 idx = metar.find('Q')
-                qnh = metar[idx+1:idx+5]
+                qnh = metar[idx+1:idx+5]  # pyre-ignore
                 return int(qnh) if qnh.isdigit() else 0
             except:
                 return 0
@@ -687,8 +716,8 @@ def api_latest():
     df["metar"] = df["metar"].fillna("").astype(str)
 
     labels = df["time"].tolist()
-    temps = []
-    pressures = []
+    temps: list = []
+    pressures: list = []
 
     for metar in df["metar"]:
 
@@ -836,7 +865,8 @@ def api_metar_single(station_code):
         "temp": parsed.get("temperature_c"),
         "dewpoint": parsed.get("dewpoint_c"),
         "visibility_m": parsed.get("visibility_m"),
-        "status": parsed.get("status", "normal")
+        "status": parsed.get("status", "normal"),
+        "report_type": parsed.get("report_type", "METAR")   # 🔥 UPDATED
     })
 
 # =========================
@@ -962,7 +992,7 @@ def home():
             if qam:
                 send_whatsapp_message(qam)
 
-                print(f"[HOME] Using historical METAR: {metar[:50]}...")
+                print(f"[HOME] Using historical METAR: {str(metar)[:50]}...")  # pyre-ignore
 
     # Read history and prepare chart data
     if os.path.exists(CSV_FILE):
@@ -1062,13 +1092,13 @@ def history_by_date():
 
     results = None
     station = "WARR"  # Default station
-    labels = []
-    temps = []
-    pressures = []
-    winds = []
-    gusts = []
-    thunder_flags = []
-    wind_dirs = []
+    labels: list = []
+    temps: list = []
+    pressures: list = []
+    winds: list = []
+    gusts: list = []
+    thunder_flags: list = []
+    wind_dirs: list = []
     start_date = ""
     end_date = ""
 
@@ -1222,7 +1252,8 @@ def background_metar_loop():
                     "cloud": parsed.get("cloud"),
                     "qnh": parsed.get("pressure_hpa"),
                     "weather": parsed.get("weather"),
-                    "metar_status": parsed.get("status", "normal")
+                    "metar_status": parsed.get("status", "normal"),
+                    "report_type": parsed.get("report_type", "METAR")  # 🔥 UPDATED
                 })
                 else:
                     print("[LOOP] METAR unchanged, skipping save")
@@ -1272,6 +1303,126 @@ def download_history():
     )
 
 # =========================
+# METAR VALIDATOR
+# =========================
+def validate_metar(metar: str) -> list[str]:
+    """
+    Comprehensive METAR Validator for 10 groups
+    Returns a list of error strings or ["✅ METAR Valid"]
+    """
+    if not metar:
+        return ["❌ Data METAR kosong"]
+
+    errors: list[str] = []
+    
+    # Pre-clean: remove = and handle multiple spaces
+    clean_metar = metar.replace("=", "").strip()
+    tokens = clean_metar.split()
+
+    if len(tokens) < 5:
+        return ["❌ Format METAR terlalu pendek atau tidak lengkap"]
+
+    # Skip first token if it's "METAR" or "SPECI"
+    idx = 0
+    if tokens[idx] in ["METAR", "SPECI"]:
+        idx += 1
+
+    # 1. ICAO Station (4 letters)
+    if idx < len(tokens):
+        if not re.match(r'^[A-Z]{4}$', tokens[idx]):
+            errors.append(f"❌ ICAO station salah: {tokens[idx]} (harus 4 huruf Kapital)")
+        idx += 1
+
+    # 2. Time Group (6 digits + Z)
+    if idx < len(tokens):
+        if not re.match(r'^\d{6}Z$', tokens[idx]):
+            errors.append(f"❌ Format waktu salah: {tokens[idx]} (harus 6 digit + Z)")
+        idx += 1
+
+    # 3. Wind Group (may be absent in some reports)
+    if idx < len(tokens):
+        # Supports: 05006KT, 18012G20KT, VRB03KT, 00000KT
+        wind_pattern = r'^(\d{3}|VRB)\d{2}(G\d{2,3})?KT$'
+        if re.match(wind_pattern, tokens[idx]):
+            idx += 1  # Valid wind, advance
+        elif tokens[idx].endswith('KT'):
+            # Looks like wind but malformed
+            errors.append(f"❌ Format angin salah: {tokens[idx]}")
+            idx += 1
+        else:
+            # No wind group found (missing), report error but don't skip the token
+            errors.append("❌ Angin tidak ditemukan")
+
+    # From here on, groups can be more dynamic. We'll search for them.
+    remaining_tokens: list[str] = tokens[idx:] if idx < len(tokens) else []  # pyre-ignore
+    
+    # 4. Visibility Group (4 digits, CAVOK, or M1/4SM etc - sticking to metric for now)
+    vis_found = False
+    for i, t in enumerate(remaining_tokens):
+        if re.match(r'^\d{4}$', t) or t == "CAVOK":
+            vis_found = True
+            # Check for 9999 or specific digits
+            break
+    if not vis_found:
+        errors.append("❌ Cek Visibility (harus 4 digit atau CAVOK)")
+
+    # 5. Weather Group (Optional)
+    # 6. Cloud Group
+    cloud_prefixes = ["FEW", "SCT", "BKN", "OVC", "SKC", "NSC", "NCD", "VV"]
+    cloud_found = False
+    for t in remaining_tokens:
+        if any(t.startswith(p) for p in cloud_prefixes):
+            cloud_found = True
+            if t in ["SKC", "NSC", "NCD"]: continue
+            
+            # Extract height (3 digits)
+            height_part = re.search(r'\d{3}', t)
+            if not height_part:
+                errors.append(f"❌ Tinggi awan salah: {t} (harus 3 digit)")
+            
+            # Check prefix format specifically if it matches but has wrong height
+            prefix = t[:3]  # pyre-ignore
+            if prefix in ["FEW", "SCT", "BKN", "OVC"]:
+                height = t[3:6]  # pyre-ignore
+                if not height.isdigit() or len(height) != 3:
+                     errors.append(f"❌ Format kelompok awan salah: {t} (tinggi harus 3 digit)")
+        
+        # Catch errors like TL103 mentioned by user
+        elif re.match(r'^[A-Z]{2}\d+', t) and "/" not in t and "KT" not in t and not t.startswith("Q"):
+             errors.append(f"❌ Format kelompok awan salah: {t} (prefix harus FEW/SCT/BKN/OVC)")
+
+    # 7. Temperature/Dewpoint (M?dd/M?dd)
+    temp_pattern = r'^M?\d{2}/M?\d{2}$'
+    if not any(re.match(temp_pattern, t) for t in remaining_tokens):
+        # Using any() for CAVOK check to avoid Pyre __contains__ bug
+        has_cavok = any(t == "CAVOK" for t in remaining_tokens)
+        if not has_cavok or not any("/" in t for t in remaining_tokens):
+            errors.append("❌ Format suhu TT/TdTd salah (contoh: 31/24)")
+
+    # 8. Pressure Group (Q + 4 digits)
+    if not any(re.match(r'^Q\d{4}$', t) for t in remaining_tokens):
+        errors.append("❌ Tekanan (QNH) salah (contoh: Q1010)")
+
+    # 9. Trend Group (Optional check)
+    trend_keywords = ["NOSIG", "TEMPO", "BECMG"]
+    # No hard error if missing, but can check format if present
+
+    if len(errors) == 0:
+        return ["✅ METAR Valid"]
+
+    return errors
+
+@app.route("/api/validate", methods=["POST"])
+def api_validate():
+    data = request.get_json()
+    if not data or "metar" not in data:
+        return jsonify({"results": ["❌ Input tidak ditemukan"]}), 400
+    
+    metar = data["metar"].strip()
+    results = validate_metar(metar)
+    return jsonify({"results": results})
+
+# =========================
 # MANUAL METAR PARSER
 # =========================
 @app.route("/manual_parser", methods=["GET", "POST"])
@@ -1279,17 +1430,20 @@ def manual_parser():
 
     raw_metar = None
     parsed_qam = None
+    validation_results = None
 
     if request.method == "POST":
         raw_metar = request.form["raw_metar"].strip()
-        station = raw_metar.split()[1]
+        station = raw_metar.split()[1] if len(raw_metar.split()) > 1 else "WARR"
         parsed = parse_metar(raw_metar)
         parsed_qam = generate_qam(station, parsed, raw_metar)
+        validation_results = validate_metar(raw_metar)
 
     return render_template(
         "manual_parser.html",
         raw_metar=raw_metar,
-        parsed_qam=parsed_qam
+        parsed_qam=parsed_qam,
+        validation_results=validation_results
     )
 
 @socketio.on("connect")

@@ -113,11 +113,24 @@
                 <div class="metar-raw-panel {% if latest.status == 'danger' %}status-danger{% elif latest.status == 'warning' %}status-warning{% endif %}"
                     id="metarRawPanel">
                     <div class="panel-title">📡 RAW METAR DATA</div>
-                    <div class="metar-raw-code" id="metarRawCode">{{ latest.metar }}</div>
+                    <div class="metar-raw-code" id="metarRawCode">
+                        {{ latest.metar }}
+                        {% if latest.report_type == 'COR' or 'COR' in latest.metar or 'CCA' in latest.metar %}
+                        <span class="badge" style="background-color: #f59e0b; color: #1e293b; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ COR</span>
+                        {% elif latest.report_type == 'AMD' or 'AMD' in latest.metar %}
+                        <span class="badge" style="background-color: #3b82f6; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ AMD</span>
+                        {% elif latest.report_type == 'SPECI' or 'SPECI' in latest.metar %}
+                        <span class="badge" style="background-color: #ef4444; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ SPECI</span>
+                        {% endif %}
+                    </div>
                     <div class="metar-actions">
                         <button class="btn btn-sm btn-outline" onclick="copyMetar()">📋 Copy</button>
                         <button class="btn btn-sm btn-outline" onclick="location.reload()">🔄 Refresh</button>
                         <span class="copy-feedback" id="metarCopyFeedback">Copied!</span>
+                    </div>
+                    <!-- Validation Display -->
+                    <div id="metarValidation" style="margin-top: 12px; font-size: 0.85rem; font-family: 'Inter', sans-serif;">
+                        <!-- Populated by dashboard.js -->
                     </div>
                 </div>
 
@@ -168,6 +181,19 @@
 
             </div>
             {% endif %}
+
+            <!-- ========== NEW: MINI TIMELINE ========== -->
+            <div class="card fade-in" style="animation-delay:0.12s">
+                <div class="card-header" style="padding-bottom: 10px; border-bottom: 1px solid rgba(0,0,0,0.05);">
+                    <h3 class="card-title" style="font-size: 1.1rem;"><span class="icon">⏱️</span> METAR Timeline</h3>
+                </div>
+                <div class="timeline-container" style="padding: 15px 0; overflow-x: auto;">
+                    <div id="metarTimeline" style="display: flex; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">
+                        <!-- Timeline items will be injected here via dashboard.js -->
+                        <span style="color: #64748b;">Loading timeline...</span>
+                    </div>
+                </div>
+            </div>
 
             <!-- ========== QAM & NARRATIVE ========== -->
             {% if qam %}

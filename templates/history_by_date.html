@@ -176,7 +176,18 @@
                             <tr>
                                 <td>{{ row.station }}</td>
                                 <td>{{ row.time }}</td>
-                                <td class="metar-cell">{{ row.metar }}</td>
+                                <td class="metar-cell">
+                                    {{ row.metar }}
+                                    {% if " COR " in row.metar or row.metar.startswith("METAR COR") or " CCA " in row.metar or "CCA" in row.metar %}
+                                    <span class="badge badge-cor" style="background-color: #f59e0b; color: #1e293b; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🟡 COR</span>
+                                    {% elif " AMD " in row.metar or row.metar.startswith("METAR AMD") %}
+                                    <span class="badge badge-amd" style="background-color: #3b82f6; color: #ffffff; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🔵 AMD</span>
+                                    {% elif " SPECI " in row.metar or row.metar.startswith("SPECI ") %}
+                                    <span class="badge badge-speci" style="background-color: #ef4444; color: #ffffff; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🔴 SPECI</span>
+                                    {% else %}
+                                    <span class="badge badge-metar" style="background-color: #059669; color: #ffffff; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🟢 METAR</span>
+                                    {% endif %}
+                                </td>
                             </tr>
                             {% endfor %}
                         </tbody>

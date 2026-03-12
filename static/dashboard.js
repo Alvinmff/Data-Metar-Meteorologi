@@ -145,6 +145,48 @@ function highlightMetar(raw) {
     return highlighted.join(' ');
 }
 
+/**
+ * 🔥 METAR Validator Feature
+ * Calls /api/validate to check the METAR string against 10 group rules
+ */
+async function runMetarValidation(raw) {
+    const displayEl = document.getElementById('metarValidation');
+    if (!displayEl || !raw) return;
+
+    try {
+        const response = await fetch('/api/validate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ metar: raw })
+        });
+        const data = await response.json();
+        const results = data.results || [];
+
+        const isValid = results.length === 1 && results[0].startsWith('✅');
+        const bgColor = isValid ? '#ECFDF5' : '#FEF2F2';
+        const borderColor = isValid ? '#A7F3D0' : '#FECACA';
+        const textColor = isValid ? '#065F46' : '#991B1B';
+
+        let html = `
+            <div style="margin-top: 12px; padding: 12px; border-radius: 8px; background: ${bgColor}; border: 1px solid ${borderColor}; color: ${textColor};">
+                <div style="font-weight: 700; font-size: 0.9rem; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                    <span>📋</span> Validation Results:
+                </div>
+                <ul style="list-style: none; padding: 0; margin: 0; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; line-height: 1.5;">
+        `;
+
+        results.forEach(err => {
+            html += `<li style="margin-bottom: 2px;">${err}</li>`;
+        });
+
+        html += '</ul></div>';
+        displayEl.innerHTML = html;
+    } catch (err) {
+        console.error('Validation API error:', err);
+    }
+}
+
+
 // =======================
 // DECODED PARAMETERS PANEL
 // =======================
@@ -506,7 +548,11 @@ socket.on('metar_update', function (data) {
     if (data.raw) {
         const rawEl = document.getElementById('metarRawCode');
         if (rawEl) {
-            rawEl.innerHTML = highlightMetar(data.raw);
+            let htmlStr = highlightMetar(data.raw);
+            if (data.is_correction || data.raw.includes('COR') || data.raw.includes('CCA')) {
+                htmlStr += '\n                        <span class="badge" style="background-color: #f59e0b; color: #1e293b; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ CORRECTION</span>';
+            }
+            rawEl.innerHTML = htmlStr;
         }
 
         // Update status color
@@ -554,6 +600,8 @@ socket.on('metar_update', function (data) {
     // Charts and history updates moved here (after duplicate check)
     updateCharts();
     updateHistoryTable();
+    updateMiniTimeline(); // 🔥 NEW
+    runMetarValidation(data.raw); // 🔥 NEW VALIDATOR
 });
 
 // =======================
@@ -924,7 +972,17 @@ async function fetchMetar() {
         if (data.raw) {
             updateDecodedPanel(data.raw);
             const rawEl = document.getElementById('metarRawCode');
-            if (rawEl) rawEl.innerHTML = highlightMetar(data.raw);
+            if (rawEl) {
+                let htmlStr = highlightMetar(data.raw);
+                if (data.report_type === 'COR' || data.raw.includes('COR') || data.raw.includes('CCA')) {
+                    htmlStr += '\n                        <span class="badge" style="background-color: #f59e0b; color: #1e293b; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ COR</span>';
+                } else if (data.report_type === 'AMD' || data.raw.includes('AMD')) {
+                    htmlStr += '\n                        <span class="badge" style="background-color: #3b82f6; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ AMD</span>';
+                } else if (data.report_type === 'SPECI' || data.raw.includes('SPECI')) {
+                    htmlStr += '\n                        <span class="badge" style="background-color: #ef4444; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ SPECI</span>';
+                }
+                rawEl.innerHTML = htmlStr;
+            }
         }
     } catch (e) {
         console.error('METAR fetch error:', e);
@@ -946,10 +1004,21 @@ async function updateHistoryTable() {
             result.data.forEach((item, i) => {
                 const row = document.createElement('tr');
                 row.style.animation = `fadeIn 0.3s ease-out ${i * 0.03}s both`;
+                let badgeHtml = '';
+                if (item.metar.includes(' COR ') || item.metar.startsWith('METAR COR') || item.metar.includes('CCA') || item.metar.includes(' CCA ')) {
+                    badgeHtml = '<span class="badge badge-cor" style="background-color: #f59e0b; color: #1e293b; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🟡 COR</span>';
+                } else if (item.metar.includes(' AMD ') || item.metar.startsWith('METAR AMD')) {
+                    badgeHtml = '<span class="badge badge-amd" style="background-color: #3b82f6; color: #ffffff; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🔵 AMD</span>';
+                } else if (item.metar.includes(' SPECI ') || item.metar.startsWith('SPECI ')) {
+                    badgeHtml = '<span class="badge badge-speci" style="background-color: #ef4444; color: #ffffff; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🔴 SPECI</span>';
+                } else {
+                    badgeHtml = '<span class="badge badge-metar" style="background-color: #059669; color: #ffffff; margin-left: 6px; font-size: 0.70rem; padding: 2px 6px; vertical-align: middle;">🟢 METAR</span>';
+                }
+                
                 row.innerHTML = `
                     <td>${item.time}</td>
                     <td>${item.station}</td>
-                    <td class="metar-cell">${item.metar}</td>
+                    <td class="metar-cell">${item.metar}${badgeHtml}</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -958,6 +1027,66 @@ async function updateHistoryTable() {
         }
     } catch (e) {
         console.error('History table error:', e);
+    }
+}
+
+// =======================
+// MINI TIMELINE RENDERER
+// =======================
+async function updateMiniTimeline() {
+    try {
+        const res = await fetch('/api/history');
+        const result = await res.json();
+        const tlContainer = document.getElementById('metarTimeline');
+        
+        // This element only exists on index.html
+        if (!tlContainer) return;
+
+        tlContainer.innerHTML = '';
+        
+        if (result.data && result.data.length > 0) {
+            // We want chronological order for timeline (oldest to newest left to right)
+            // The API returns newest first (descending), so we reverse it or just slice
+            // Let's show the last 5 reports for the timeline
+            const timelineData = result.data.slice(0, 5).reverse();
+            
+            timelineData.forEach((item) => {
+                // Extract just the HH:MM
+                const timeMatch = item.time.match(/\d{4}-\d{2}-\d{2}\s(\d{2}:\d{2})/);
+                const shortTime = timeMatch ? timeMatch[1] : item.time;
+                
+                let badgeText = 'METAR';
+                let badgeColor = '#059669'; // Emerald
+                
+                if (item.metar.includes(' COR ') || item.metar.startsWith('METAR COR') || item.metar.includes('CCA') || item.metar.includes(' CCA ')) {
+                    badgeText = 'COR';
+                    badgeColor = '#f59e0b'; // Amber
+                } else if (item.metar.includes(' AMD ') || item.metar.startsWith('METAR AMD')) {
+                    badgeText = 'AMD';
+                    badgeColor = '#3b82f6'; // Blue
+                } else if (item.metar.includes(' SPECI ') || item.metar.startsWith('SPECI ')) {
+                    badgeText = 'SPECI';
+                    badgeColor = '#ef4444'; // Red
+                }
+
+                const node = document.createElement('div');
+                node.style.cssText = 'display: flex; flex-direction: column; align-items: center; min-width: 60px;';
+                node.innerHTML = `
+                    <span style="font-weight: bold; margin-bottom: 4px;">${shortTime}</span>
+                    <span style="background-color: ${badgeColor}; color: ${badgeText === 'COR' ? '#1e293b' : '#fff'}; padding: 2px 8px; border-radius: 4px; font-size: 0.70rem; font-weight: bold;">
+                        ${badgeText}
+                    </span>
+                `;
+                
+                tlContainer.appendChild(node);
+                
+                // Add a connector line if it's not the last element (handled implicitly via gap in CSS)
+            });
+        } else {
+            tlContainer.innerHTML = '<span style="color: #64748b;">No recent reports</span>';
+        }
+    } catch (e) {
+        console.error('Mini timeline error:', e);
     }
 }
 
@@ -1104,6 +1233,7 @@ document.addEventListener('DOMContentLoaded', function () {
     createWindChart();
     updateCharts();
     loadHistory();
+    updateMiniTimeline(); // 🔥 NEW
     loadWindCompass();
     loadWindRose();
 
@@ -1121,13 +1251,26 @@ document.addEventListener('DOMContentLoaded', function () {
                     
                     updateDecodedPanel(data.raw);
                     const rawEl = document.getElementById('metarRawCode');
-                    if (rawEl) rawEl.innerHTML = highlightMetar(data.raw);
+                    if (rawEl) {
+                        let htmlStr = highlightMetar(data.raw);
+                        if (data.report_type === 'COR' || data.raw.includes('COR') || data.raw.includes('CCA')) {
+                            htmlStr += '\n                        <span class="badge" style="background-color: #f59e0b; color: #1e293b; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ COR</span>';
+                        } else if (data.report_type === 'AMD' || data.raw.includes('AMD')) {
+                            htmlStr += '\n                        <span class="badge" style="background-color: #3b82f6; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ AMD</span>';
+                        } else if (data.report_type === 'SPECI' || data.raw.includes('SPECI')) {
+                            htmlStr += '\n                        <span class="badge" style="background-color: #ef4444; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ SPECI</span>';
+                        }
+                        rawEl.innerHTML = htmlStr;
+                    }
                     
                     // If sound is ALREADY enabled and condition is bad, try to play 
                     // (though browser may block until interaction)
                     if (soundEnabled && (lastVisibility < 3000 || lastHasTS)) {
                          playAlarm();
                     }
+
+                    // Initial Validation
+                    runMetarValidation(data.raw);
                 }
             });
     }
