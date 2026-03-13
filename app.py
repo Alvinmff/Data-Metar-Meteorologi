@@ -1059,6 +1059,18 @@ def home():
     last_saved = history["time"].iloc[-1] if has_history else "N/A"
     print(f"[HOME] Rendering template with QAM: {qam is not None}")
 
+    # Pre-format last_metar_update for the template (WIB)
+    last_update_display = "--:-- WIB"
+    if last_metar_update:
+        try:
+            # last_metar_update is ISO string (UTC)
+            dt = pd.to_datetime(last_metar_update)
+            # Manual WIB offset (UTC+7)
+            wib_dt = dt + timedelta(hours=7)
+            last_update_display = wib_dt.strftime("%H:%M") + " WIB"
+        except:
+            pass
+
     return render_template(
         "index.html",
         station=station,
@@ -1072,7 +1084,7 @@ def home():
         labels=labels,
         has_history=has_history,
         auto_fetch=auto_fetch,
-        last_metar_update=last_metar_update
+        last_metar_update=last_update_display
     )
 
 # =========================

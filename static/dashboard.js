@@ -751,8 +751,8 @@ function updateStatusPanel(data) {
     if (lastEl) {
         if (data.last_update) {
             const date = new Date(data.last_update);
-            const timeStr = date.getUTCHours().toString().padStart(2, '0') + ':' + 
-                            date.getUTCMinutes().toString().padStart(2, '0') + ' UTC';
+            const timeStr = date.getHours().toString().padStart(2, '0') + ':' + 
+                            date.getMinutes().toString().padStart(2, '0') + ' WIB';
             lastEl.textContent = timeStr;
         } else {
             lastEl.textContent = "WAITING...";
