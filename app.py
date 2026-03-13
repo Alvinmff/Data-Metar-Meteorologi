@@ -988,7 +988,7 @@ def home():
         if len(df) == 0 or df.iloc[-1]["metar"] != metar:
             new_row = {
                 "station": station,
-                "time": datetime.now(),
+                "time": datetime.utcnow(),
                 "metar": metar
             }
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
@@ -1020,9 +1020,9 @@ def home():
                 # Fallback successful
                 print(f"[HOME] Using historical METAR: {str(metar)[:50]}...")  # pyre-ignore
                 try:
-                    last_metar_update = pd.to_datetime(last_row["time"]).isoformat()
+                    last_metar_update = pd.to_datetime(last_row["time"]).isoformat() + "Z"
                 except:
-                    last_metar_update = datetime.utcnow().isoformat()
+                    last_metar_update = datetime.utcnow().isoformat() + "Z"
 
     # Read history and prepare chart data
     if os.path.exists(CSV_FILE):
@@ -1238,7 +1238,7 @@ def health():
         try:
             df = pd.read_csv(CSV_FILE)
             if not df.empty:
-                last_metar_update = pd.to_datetime(df.iloc[-1]["time"]).isoformat()
+                last_metar_update = pd.to_datetime(df.iloc[-1]["time"]).isoformat() + "Z"
         except:
             pass
 
@@ -1304,7 +1304,7 @@ def background_metar_loop():
                     print("[LOOP] NEW METAR detected! Saving to CSV...")
                     new_row = {
                         "station": station,
-                        "time": datetime.now(),
+                        "time": datetime.utcnow(),
                         "metar": metar
                     }
 
@@ -1329,7 +1329,7 @@ def background_metar_loop():
                         "qam": qam,
                         "raw": metar,
                         "narrative": narrative,
-                        "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+                        "time": datetime.utcnow().strftime("%d-%m-%Y %H:%M:%S"),
                         "wind_dir": parsed.get("wind_dir"),
                         "wind_speed": parsed.get("wind_speed_kt"),
                         "wind_gust": parsed.get("wind_gust_kt"),
@@ -1342,13 +1342,13 @@ def background_metar_loop():
                         "metar_status": parsed.get("status", "normal"),
                         "report_type": parsed.get("report_type", "METAR"),
                         "auto_fetch": auto_fetch,  # Include status in specific updates
-                        "last_update": datetime.utcnow().isoformat()
+                        "last_update": datetime.utcnow().isoformat() + "Z"
                     })
                 else:
                     print("[LOOP] METAR unchanged, skipping save")
                 
                 # Update last update timestamp whenever a fetch is successful (even if data is unchanged)
-                last_metar_update = datetime.utcnow().isoformat()
+                last_metar_update = datetime.utcnow().isoformat() + "Z"
             else:
                 print("[LOOP] ❌ No METAR received from NOAA!")
 
@@ -1559,7 +1559,7 @@ if __name__ == "__main__":
             if not df.empty:
                 last_time = df.iloc[-1]["time"]
                 # Convert to ISO format (UTC)
-                last_metar_update = pd.to_datetime(last_time).isoformat()
+                last_metar_update = pd.to_datetime(last_time).isoformat() + "Z"
                 print(f"[INIT] last_metar_update initialized: {last_metar_update}")
         except Exception as e:
             print(f"[INIT] Failed to initialize last_metar_update: {e}")
