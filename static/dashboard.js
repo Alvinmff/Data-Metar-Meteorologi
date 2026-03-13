@@ -21,7 +21,66 @@ let currentWindDir = null;
 let currentWindSpeed = null;
 let currentWindGust = null;
 
-const socket = io();
+const socket = io(window.location.origin);
+
+// =======================
+// CONNECTION STATUS HELPER
+// =======================
+function updateConnectionIndicator(isOnline) {
+    const dot = document.getElementById('connectionDot');
+    const text = document.getElementById('connectionText');
+    
+    if (dot) {
+        if (isOnline) {
+            dot.classList.add('online');
+        } else {
+            dot.classList.remove('online');
+        }
+    }
+    
+    if (text) {
+        text.textContent = isOnline ? 'LIVE' : 'OFFLINE';
+    }
+}
+
+// =======================
+// SOCKET EVENTS
+// =======================
+socket.on('connect', () => {
+    console.log("Connected to server");
+    updateConnectionIndicator(true);
+});
+
+socket.on('disconnect', () => {
+    console.log("Disconnected from server");
+    updateConnectionIndicator(false);
+});
+
+socket.on('connect_error', (error) => {
+    console.error("Connection error:", error);
+    updateConnectionIndicator(false);
+});
+
+// =======================
+// KEEP-ALIVE PING
+// =======================
+function checkServerStatus() {
+    fetch("/ping")
+        .then(res => res.json())
+        .then(data => {
+            console.log("[PING] Server alive:", data.timestamp);
+            updateConnectionIndicator(true);
+        })
+        .catch(err => {
+            console.error("[PING FAILED]", err);
+            updateConnectionIndicator(false);
+        });
+}
+
+// Check every 60 seconds (down from 5 min)
+setInterval(checkServerStatus, 60000);
+// Check immediately on load
+checkServerStatus();
 
 // =======================
 // CLOCKS (UTC & WIB)
@@ -662,7 +721,70 @@ socket.on('metar_update', function (data) {
     updateHistoryTable();
     updateMiniTimeline(); // 🔥 NEW
     runMetarValidation(data.raw); // 🔥 NEW VALIDATOR
+    
+    // Update System Status Panel if data arrives
+    if (data.auto_fetch !== undefined) {
+        updateStatusPanel(data);
+    }
 });
+
+// New listener for global system status updates
+socket.on('system_status_update', (data) => {
+    console.log("[SOCKET] System status update:", data);
+    updateStatusPanel(data);
+});
+
+// =======================
+// SYSTEM CONTROL
+// =======================
+function updateStatusPanel(data) {
+    const serverEl = document.getElementById('server-status');
+    const metarEl = document.getElementById('metar-status');
+    const lastEl = document.getElementById('last-update-status');
+    
+    if (serverEl) serverEl.textContent = "ONLINE 🟢";
+    if (metarEl) {
+        metarEl.textContent = data.auto_fetch ? "RUNNING 🟢" : "PAUSED 🟡";
+        metarEl.className = 'status-value ' + (data.auto_fetch ? 'status-running' : 'status-paused');
+    }
+    
+    if (lastEl) {
+        if (data.last_update) {
+            const date = new Date(data.last_update);
+            const timeStr = date.getUTCHours().toString().padStart(2, '0') + ':' + 
+                            date.getUTCMinutes().toString().padStart(2, '0') + ' UTC';
+            lastEl.textContent = timeStr;
+        } else {
+            lastEl.textContent = "WAITING...";
+        }
+    }
+}
+
+async function toggleSystem() {
+    try {
+        const res = await fetch("/api/toggle_fetch", { method: "POST" });
+        const data = await res.json();
+        
+        updateStatusPanel(data);
+        showToast(
+            'System Control',
+            `Auto fetch: ${data.auto_fetch ? 'ENABLED ✅' : 'DISABLED ⏸️'}`,
+            data.auto_fetch ? 'success' : 'warning'
+        );
+    } catch (err) {
+        console.error("Toggle system failed:", err);
+        showToast('Error', 'Failed to toggle system', 'danger');
+    }
+}
+
+// Global expose
+window.toggleSystem = toggleSystem;
+
+// Initial health check
+fetch("/health")
+    .then(r => r.json())
+    .then(updateStatusPanel)
+    .catch(() => console.warn("Initial health check failed"));
 
 // =======================
 // ALERT BANNER

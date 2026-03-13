@@ -93,6 +93,32 @@
                 <button class="alert-dismiss" onclick="dismissAlert()">Acknowledge</button>
             </div>
 
+            <!-- System Status Panel -->
+            <div class="card system-status-card fade-in" style="animation-delay:0.03s">
+                <div class="card-header">
+                    <h3 class="card-title" style="font-size: 1.1rem;"><span class="icon">🖥️</span> System Status</h3>
+                    <button class="btn btn-sm btn-outline" onclick="toggleSystem()" id="toggleSystemBtn">⏻ Toggle System</button>
+                </div>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <span class="status-label">SERVER</span>
+                        <span class="status-value status-online" id="server-status">ONLINE 🟢</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">METAR FETCH</span>
+                        <span class="status-value {% if auto_fetch %}status-running{% else %}status-paused{% endif %}" id="metar-status">
+                            {% if auto_fetch %}RUNNING 🟢{% else %}PAUSED 🟡{% endif %}
+                        </span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">LAST UPDATE</span>
+                        <span class="status-value" id="last-update-status">
+                            {{ last_metar_update if last_metar_update else "--:-- UTC" }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Station Input Form -->
             <div class="card fade-in" style="animation-delay:0.05s">
                 <form method="POST" class="form-row">

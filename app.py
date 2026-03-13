@@ -1,3 +1,19 @@
+import platform
+
+try:
+    import eventlet
+    # On Windows, eventlet monkey_patch can be unstable and cause BrokenPipeErrors
+    if platform.system() != "Windows":
+        eventlet.monkey_patch()
+        async_mode = "eventlet"
+        print("🚀 Production mode: Eventlet with monkey_patch")
+    else:
+        async_mode = "threading"
+        print("💻 Development mode: Windows detected, using threading")
+except ImportError:
+    async_mode = "threading"
+    print("⚠️ Eventlet not found, falling back to threading")
+
 from flask import Flask, render_template, request, send_file  # pyre-ignore
 import requests  # pyre-ignore
 import pandas as pd  # pyre-ignore
@@ -15,7 +31,29 @@ from collections import deque
 
 
 app = Flask(__name__)
-socketio = SocketIO(app, async_mode="threading")
+# Environment-based CORS
+allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+socketio = SocketIO(app, async_mode=async_mode, cors_allowed_origins=allowed_origins, manage_session=False)
+
+# System Control State
+auto_fetch = True
+last_metar_update = None
+
+# ============ HELPER FUNCTIONS ============
+
+def extract_temp(metar):
+    """Extract temperature from METAR (XX/XX)"""
+    if not metar: return None
+    match = re.search(r'(\d{2})/(\d{2})', str(metar))
+    return int(match.group(1)) if match else None
+
+def extract_pressure(metar):
+    """Extract QNH pressure from METAR (QXXXX)"""
+    if not metar: return None
+    match = re.search(r'Q(\d{4})', str(metar))
+    return int(match.group(1)) if match else None
+
+# ==========================================
 
 CSV_FILE = "metar_history.csv"
 
@@ -76,23 +114,7 @@ def load_wind_history():
         print(f"❌ Failed to load wind history: {e}")
 
 
-FONNTE_TOKEN = "iNQh3nXPgRFpShmXvZb4"
-WA_TARGET = ""  # nomor tujuan (format 62 tanpa +)
 
-def send_whatsapp_message(message):
-    url = "https://api.fonnte.com/send"
-
-    headers = {
-        "Authorization": FONNTE_TOKEN
-    }
-
-    data = {
-        "target": WA_TARGET,
-        "message": message
-    }
-
-    response = requests.post(url, headers=headers, data=data)
-    return response.status_code
 
 import math
 
@@ -929,6 +951,7 @@ def windrose_api(station):
 # =========================
 @app.route("/", methods=["GET", "POST"])
 def home():
+    global last_metar_update, auto_fetch
     station = "WARR"
     metar = None
     parsed = None
@@ -943,9 +966,15 @@ def home():
     if request.method == "POST":
         station = request.form["icao"].upper()
         print(f"[HOME] POST request with station: {station}")
+        fetch_needed = True
+    else:
+        fetch_needed = auto_fetch # Only fetch on GET if auto_fetch is enabled
 
-    print(f"[HOME] Fetching live METAR for {station}...")
-    metar = get_metar(station)
+    if fetch_needed:
+        print(f"[HOME] Fetching live METAR for {station}...")
+        metar = get_metar(station)
+    else:
+        print(f"[HOME] Auto fetch is DISABLED - skipping home route live fetch")
     
     if metar:
         print(f"[HOME] Live METAR received: {metar[:50]}...")
@@ -988,11 +1017,12 @@ def home():
                 qam = generate_qam(station, parsed, metar)
                 narrative = generate_metar_narrative(parsed, metar)
                 
-                 # 🔥 KIRIM WA DI SINI
-            if qam:
-                send_whatsapp_message(qam)
-
+                # Fallback successful
                 print(f"[HOME] Using historical METAR: {str(metar)[:50]}...")  # pyre-ignore
+                try:
+                    last_metar_update = pd.to_datetime(last_row["time"]).isoformat()
+                except:
+                    last_metar_update = datetime.utcnow().isoformat()
 
     # Read history and prepare chart data
     if os.path.exists(CSV_FILE):
@@ -1040,7 +1070,9 @@ def home():
         temps=temps,
         pressures=pressures,
         labels=labels,
-        has_history=has_history
+        has_history=has_history,
+        auto_fetch=auto_fetch,
+        last_metar_update=last_metar_update
     )
 
 # =========================
@@ -1189,11 +1221,66 @@ def history_by_date():
     )
 
 
+# ============ SYSTEM CONTROL ENDPOINTS ============
+
+@app.route("/ping")
+def ping():
+    """Keep-alive endpoint untuk frontend"""
+    return jsonify({"status": "alive", "timestamp": datetime.utcnow().isoformat()})
+
+@app.route("/health")
+def health():
+    """Health check untuk monitoring eksternal"""
+    global last_metar_update
+    
+    # Fallback: if last_metar_update is None, try to get from CSV
+    if last_metar_update is None and os.path.exists(CSV_FILE):
+        try:
+            df = pd.read_csv(CSV_FILE)
+            if not df.empty:
+                last_metar_update = pd.to_datetime(df.iloc[-1]["time"]).isoformat()
+        except:
+            pass
+
+    return jsonify({
+        "status": "ok",
+        "server": "online",
+        "auto_fetch": auto_fetch,
+        "last_update": last_metar_update
+    })
+
+@app.route("/api/toggle_fetch", methods=["POST"])
+def toggle_fetch():
+    """System Control ON/OFF"""
+    global auto_fetch
+    auto_fetch = not auto_fetch
+    
+    # Broadcast current system status to all clients immediately
+    socketio.emit("system_status_update", {
+        "auto_fetch": auto_fetch,
+        "last_update": last_metar_update,
+        "server": "online"
+    })
+
+    return jsonify({
+        "auto_fetch": auto_fetch,
+        "last_update": last_metar_update,
+        "message": f"Auto fetch {'ENABLED' if auto_fetch else 'DISABLED'}"
+    })
+
+# =========================
+
 def background_metar_loop():
     print("✅ Background loop started")
+    global last_metar_update, auto_fetch
 
     while True:
         try:
+            if not auto_fetch:
+                print("[SYSTEM] Auto fetch is DISABLED - skipping METAR update")
+                socketio.sleep(80)
+                continue
+
             station = "WARR"
             print(f"\n=== Background loop iteration ===")
             print(f"[LOOP] Fetching METAR for station: {station}")
@@ -1238,27 +1325,39 @@ def background_metar_loop():
                     print(f"[LOOP] Narrative generated:\n{narrative}")
 
                     socketio.emit("metar_update", {
-                    "status": "new",
-                    "qam": qam,
-                    "raw": metar,
-                    "narrative": narrative,
-                    "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
-                    "wind_dir": parsed.get("wind_dir"),
-                    "wind_speed": parsed.get("wind_speed_kt"),
-                    "wind_gust": parsed.get("wind_gust_kt"),
-                    "temp": parsed.get("temperature_c"),
-                    "dewpoint": parsed.get("dewpoint_c"),
-                    "visibility_m": parsed.get("visibility_m"),
-                    "cloud": parsed.get("cloud"),
-                    "qnh": parsed.get("pressure_hpa"),
-                    "weather": parsed.get("weather"),
-                    "metar_status": parsed.get("status", "normal"),
-                    "report_type": parsed.get("report_type", "METAR")  # 🔥 UPDATED
-                })
+                        "status": "new",
+                        "qam": qam,
+                        "raw": metar,
+                        "narrative": narrative,
+                        "time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+                        "wind_dir": parsed.get("wind_dir"),
+                        "wind_speed": parsed.get("wind_speed_kt"),
+                        "wind_gust": parsed.get("wind_gust_kt"),
+                        "temp": parsed.get("temperature_c"),
+                        "dewpoint": parsed.get("dewpoint_c"),
+                        "visibility_m": parsed.get("visibility_m"),
+                        "cloud": parsed.get("cloud"),
+                        "qnh": parsed.get("pressure_hpa"),
+                        "weather": parsed.get("weather"),
+                        "metar_status": parsed.get("status", "normal"),
+                        "report_type": parsed.get("report_type", "METAR"),
+                        "auto_fetch": auto_fetch,  # Include status in specific updates
+                        "last_update": datetime.utcnow().isoformat()
+                    })
                 else:
                     print("[LOOP] METAR unchanged, skipping save")
+                
+                # Update last update timestamp whenever a fetch is successful (even if data is unchanged)
+                last_metar_update = datetime.utcnow().isoformat()
             else:
                 print("[LOOP] ❌ No METAR received from NOAA!")
+
+            # Broadcast current system status to all clients
+            socketio.emit("system_status_update", {
+                "auto_fetch": auto_fetch,
+                "last_update": last_metar_update,
+                "server": "online"
+            })
 
         except Exception as e:
             print(f"[LOOP] ERROR: {e}")
@@ -1269,6 +1368,7 @@ def background_metar_loop():
         socketio.sleep(80)  # WAJIB ini, bukan time.sleep
 
 #connect websocket
+# Hapus salah satu handler connect yang duplicate
 @socketio.on("connect")
 def handle_connect():
     print("Client connected")
@@ -1446,17 +1546,28 @@ def manual_parser():
         validation_results=validation_results
     )
 
-@socketio.on("connect")
-def handle_connect():
-    print("Client connected")
-
 background_thread = None
 
 if __name__ == "__main__":
     # Pre-populate wind history for Wind Rose
     load_wind_history()
+    
+    # Initialize last_metar_update from CSV if available
+    if os.path.exists(CSV_FILE):
+        try:
+            df = pd.read_csv(CSV_FILE)
+            if not df.empty:
+                last_time = df.iloc[-1]["time"]
+                # Convert to ISO format (UTC)
+                last_metar_update = pd.to_datetime(last_time).isoformat()
+                print(f"[INIT] last_metar_update initialized: {last_metar_update}")
+        except Exception as e:
+            print(f"[INIT] Failed to initialize last_metar_update: {e}")
 
     if background_thread is None:
         background_thread = socketio.start_background_task(background_metar_loop)
 
-    socketio.run(app, debug=True, use_reloader=False)
+    # Use environment variables for production binding and debug mode
+    debug_mode = os.environ.get("FLASK_DEBUG", "False") == "True"
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(app, host="0.0.0.0", port=port, debug=debug_mode, use_reloader=False)
