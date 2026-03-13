@@ -41,7 +41,8 @@
             <div class="header-right">
                 <div class="wib-clock" id="wibClock">--:--:-- <small>WIB</small></div>
                 <div class="utc-clock" id="utcClock">--:--:-- <small>UTC</small></div>
-                <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle Dark/Light Mode">🌙</button>
+                <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()"
+                    title="Toggle Dark/Light Mode">🌙</button>
                 <button class="sound-toggle" id="soundToggle" onclick="enableSound()">🔇 Sound</button>
                 <div class="connection-status" id="connectionStatus">
                     <span class="connection-dot" id="connectionDot"></span>
@@ -97,7 +98,8 @@
             <div class="card system-status-card fade-in" style="animation-delay:0.03s">
                 <div class="card-header">
                     <h3 class="card-title" style="font-size: 1.1rem;"><span class="icon">🖥️</span> System Status</h3>
-                    <button class="btn btn-sm btn-outline" onclick="toggleSystem()" id="toggleSystemBtn">⏻ Toggle System</button>
+                    <button class="btn btn-sm btn-outline" onclick="toggleSystem()" id="toggleSystemBtn">⏻ Toggle
+                        System</button>
                 </div>
                 <div class="status-grid">
                     <div class="status-item">
@@ -106,7 +108,8 @@
                     </div>
                     <div class="status-item">
                         <span class="status-label">METAR FETCH</span>
-                        <span class="status-value {% if auto_fetch %}status-running{% else %}status-paused{% endif %}" id="metar-status">
+                        <span class="status-value {% if auto_fetch %}status-running{% else %}status-paused{% endif %}"
+                            id="metar-status">
                             {% if auto_fetch %}RUNNING 🟢{% else %}PAUSED 🟡{% endif %}
                         </span>
                     </div>
@@ -143,11 +146,17 @@
                     <div class="metar-raw-code" id="metarRawCode">
                         {{ latest.metar }}
                         {% if latest.report_type == 'COR' or 'COR' in latest.metar or 'CCA' in latest.metar %}
-                        <span class="badge" style="background-color: #f59e0b; color: #1e293b; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ COR</span>
+                        <span class="badge"
+                            style="background-color: #f59e0b; color: #1e293b; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️
+                            COR</span>
                         {% elif latest.report_type == 'AMD' or 'AMD' in latest.metar %}
-                        <span class="badge" style="background-color: #3b82f6; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ AMD</span>
+                        <span class="badge"
+                            style="background-color: #3b82f6; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️
+                            AMD</span>
                         {% elif latest.report_type == 'SPECI' or 'SPECI' in latest.metar %}
-                        <span class="badge" style="background-color: #ef4444; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️ SPECI</span>
+                        <span class="badge"
+                            style="background-color: #ef4444; color: #ffffff; margin-left: 10px; font-size: 0.75rem; padding: 4px 8px; vertical-align: middle;">⚠️
+                            SPECI</span>
                         {% endif %}
                     </div>
                     <div class="metar-actions">
@@ -156,7 +165,8 @@
                         <span class="copy-feedback" id="metarCopyFeedback">Copied!</span>
                     </div>
                     <!-- Validation Display -->
-                    <div id="metarValidation" style="margin-top: 12px; font-size: 0.85rem; font-family: 'Inter', sans-serif;">
+                    <div id="metarValidation"
+                        style="margin-top: 12px; font-size: 0.85rem; font-family: 'Inter', sans-serif;">
                         <!-- Populated by dashboard.js -->
                     </div>
                 </div>
@@ -215,7 +225,8 @@
                     <h3 class="card-title" style="font-size: 1.1rem;"><span class="icon">⏱️</span> METAR Timeline</h3>
                 </div>
                 <div class="timeline-container" style="padding: 15px 0; overflow-x: auto;">
-                    <div id="metarTimeline" style="display: flex; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">
+                    <div id="metarTimeline"
+                        style="display: flex; gap: 10px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;">
                         <!-- Timeline items will be injected here via dashboard.js -->
                         <span style="color: #64748b;">Loading timeline...</span>
                     </div>
